@@ -464,9 +464,10 @@ from pyquaternion import Quaternion
 @PIPELINES.register_module()
 class PointToMultiViewDepth(object):
 
-    def __init__(self, grid_config, downsample=1):
+    def __init__(self, grid_config, downsample=1, num_cams=6):
         self.downsample = downsample
         self.grid_config = grid_config
+        self.num_cams = num_cams
 
     def points2depthmap(self, points, height, width):
         height, width = height // self.downsample, width // self.downsample
@@ -493,7 +494,7 @@ class PointToMultiViewDepth(object):
         points_lidar = results['points']
         img = results['img'][0]
         depth_map_list = []
-        lidar2imgs = results['lidar2img'][:6]
+        lidar2imgs = results['lidar2img'][:self.num_cams]
         for lidar2img in lidar2imgs:
             lidar2img = torch.from_numpy(lidar2img).to(torch.float32)
             points_img = points_lidar.tensor[:, :3].matmul(
@@ -513,10 +514,12 @@ class PointToMultiViewDepth(object):
 @PIPELINES.register_module()
 class RadarPointToMultiViewDepth(object):
     
-    def __init__(self, grid_config, downsample=1, test_mode=False):
+    def __init__(self, grid_config, downsample=1, test_mode=False,
+                 num_cams=6):
         self.downsample = downsample
         self.grid_config = grid_config
         self.test_mode = test_mode
+        self.num_cams = num_cams
 
     def points2depthmap(self, points, height, width):
         height, width = height // self.downsample, width // self.downsample
@@ -548,7 +551,8 @@ class RadarPointToMultiViewDepth(object):
         img = results['img'][0]
         depth_map_list, rcs_map_list = [], []
         for i, points_radar in enumerate(points_radar_ms):
-            lidar2imgs = results['lidar2img'][i*6:(i+1)*6]
+            start = i * self.num_cams
+            lidar2imgs = results['lidar2img'][start:start+self.num_cams]
             for lidar2img in lidar2imgs:
                 lidar2img = torch.from_numpy(lidar2img).to(torch.float32)
                 points_img = points_radar.tensor[:, :3].matmul(
@@ -571,7 +575,7 @@ class RadarPointToMultiViewDepth(object):
         points_radar = results['radar_points'][0]
         img = results['img'][0]
         depth_map_list, rcs_map_list = [], []
-        lidar2imgs = results['lidar2img'][:6]
+        lidar2imgs = results['lidar2img'][:self.num_cams]
         for lidar2img in lidar2imgs:
             lidar2img = torch.from_numpy(lidar2img).to(torch.float32)
             points_img = points_radar.tensor[:, :3].matmul(

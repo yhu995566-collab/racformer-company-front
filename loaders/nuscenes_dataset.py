@@ -16,7 +16,17 @@ import random
 
 nu_version = 'v1.0-trainval'
 # nu_version = "v1.0-mini"
-renusc = NuScenes(version=nu_version, dataroot=str("/mnt/diskNvme1/dataset/nuscenes/"), verbose=False)
+renusc = None
+
+
+def get_nuscenes_api():
+    global renusc
+    if renusc is None:
+        dataroot = os.environ.get(
+            'RACFORMER_NUSCENES_ROOT', '/mnt/diskNvme1/dataset/nuscenes/')
+        renusc = NuScenes(
+            version=nu_version, dataroot=dataroot, verbose=False)
+    return renusc
 
 @DATASETS.register_module()
 class CustomNuScenesDataset(NuScenesDataset):
@@ -170,6 +180,7 @@ class CustomNuScenesDataset_radar(CustomNuScenesDataset):
 drop=False
 
 def get_nu_radar(sam_idx, mutil_sweep=True, num_sweeps=6, filter=True, radar_sample_rec=None, drop=drop):
+    renusc = get_nuscenes_api()
     ref_sample_rec = renusc.get('sample', sam_idx)
     datas = ref_sample_rec['data']
     radar_tokens = []

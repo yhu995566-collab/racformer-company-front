@@ -25,7 +25,8 @@ def make_sample_points(query_bbox, offset, pc_range, return_wlh=False):
     return sample_xyz  # [B, Q, P, 3]
 
 
-def sampling_4d(sample_points, mlvl_feats, scale_weights, lidar2img, image_h, image_w, aggregate=True, eps=1e-5):
+def sampling_4d(sample_points, mlvl_feats, scale_weights, lidar2img, image_h,
+                image_w, num_cams=6, aggregate=True, eps=1e-5):
     """
     Args:
         sample_points: 3D sampling points in shape [B, Q, T, G, P, 3]
@@ -43,7 +44,7 @@ def sampling_4d(sample_points, mlvl_feats, scale_weights, lidar2img, image_h, im
     """
 
     B, Q, T, G, P, _ = sample_points.shape  # [B, Q, T, G, P, 3]
-    N = 6
+    N = num_cams
     
     sample_points = sample_points.reshape(B, Q, T, G * P, 3)
 
@@ -107,7 +108,9 @@ def sampling_4d(sample_points, mlvl_feats, scale_weights, lidar2img, image_h, im
     valid_mask = valid_mask[i_batch, i_time, i_query, i_point, i_view]  # [B, Q, GP, 1]
 
     # treat the view index as a new axis for grid_sample and normalize the view index to [0, 1]
-    sample_points_cam = torch.cat([sample_points_cam, i_view[..., None].float() / (N - 1)], dim=-1)
+    view_denominator = max(N - 1, 1)
+    sample_points_cam = torch.cat(
+        [sample_points_cam, i_view[..., None].float() / view_denominator], dim=-1)
 
     # reorganize the tensor to stack T and G to the batch dim for better parallelism
     sample_points_cam = sample_points_cam.reshape(B, T, Q, G, P, 1, 3)

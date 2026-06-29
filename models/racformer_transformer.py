@@ -19,6 +19,7 @@ class RaCFormerTransformer(BaseModule):
     def __init__(self, 
                  embed_dims, 
                  num_frames=8, 
+                 num_cams=6,
                  num_points=4, 
                  num_points_bev=4, 
                  num_layers=6, 
@@ -39,7 +40,7 @@ class RaCFormerTransformer(BaseModule):
         self.embed_dims = embed_dims
         self.pc_range = pc_range
 
-        self.decoder = RaCFormerTransformerDecoder(embed_dims, num_frames, num_points, num_points_bev, num_layers, num_levels, num_classes, code_size, \
+        self.decoder = RaCFormerTransformerDecoder(embed_dims, num_frames, num_cams, num_points, num_points_bev, num_layers, num_levels, num_classes, code_size, \
                                                    img_depth_num=img_depth_num, bev_depth_num=bev_depth_num, pc_range=pc_range, num_ray=num_ray, \
                                                     d_region_list=d_region_list, spatial_shapes=spatial_shapes)
 
@@ -60,6 +61,7 @@ class RaCFormerTransformerDecoder(BaseModule):
     def __init__(self, 
                  embed_dims, 
                  num_frames=8, 
+                 num_cams=6,
                  num_points=4, 
                  num_points_bev=4, 
                  num_layers=6, 
@@ -75,11 +77,12 @@ class RaCFormerTransformerDecoder(BaseModule):
                  init_cfg=None):
         super(RaCFormerTransformerDecoder, self).__init__(init_cfg)
         self.num_layers = num_layers
+        self.num_cams = num_cams
         self.pc_range = pc_range
 
         # params are shared across all decoder layers
         self.decoder_layer = RaCFormerTransformerDecoderLayer(
-            embed_dims, num_frames, num_points, num_points_bev, num_levels, num_classes, code_size, \
+            embed_dims, num_frames, num_cams, num_points, num_points_bev, num_levels, num_classes, code_size, \
                 img_depth_num=img_depth_num, bev_depth_num=bev_depth_num, num_ray=num_ray, pc_range=pc_range, \
                     d_region_list=d_region_list, spatial_shapes=spatial_shapes,
         )
@@ -93,7 +96,7 @@ class RaCFormerTransformerDecoder(BaseModule):
 
         # calculate time difference according to timestamps
         timestamps = np.array([m['img_timestamp'] for m in img_metas], dtype=np.float64)
-        timestamps = np.reshape(timestamps, [query_bbox.shape[0], -1, 6])
+        timestamps = np.reshape(timestamps, [query_bbox.shape[0], -1, self.num_cams])
         time_diff = timestamps[:, :1, :] - timestamps
         time_diff = np.mean(time_diff, axis=-1).astype(np.float32)  # [B, F]
         time_diff = torch.from_numpy(time_diff).to(query_bbox.device)  # [B, F]
@@ -107,7 +110,7 @@ class RaCFormerTransformerDecoder(BaseModule):
         # group image features in advance for sampling, see `sampling_4d` for more details
         for lvl, feat in enumerate(mlvl_feats):
             B, TN, GC, H, W = feat.shape  # [B, TN, GC, H, W]
-            N, T, G, C = 6, TN // 6, 4, GC // 4
+            N, T, G, C = self.num_cams, TN // self.num_cams, 4, GC // 4
             feat = feat.reshape(B, T, N, G, C, H, W)
 
             if MSMV_CUDA:  # Our CUDA operator requires channel_last
@@ -127,7 +130,7 @@ class RaCFormerTransformerDecoder(BaseModule):
             )
             query_bbox = bbox_pred.clone().detach()
 
-            bbox_pred = theta_d2xy_coods(bbox_pred)
+            bbox_pred = theta_d2xy_coods(bbox_pred, self.pc_range)
 
             cls_scores.append(cls_score)
             bbox_preds.append(bbox_pred)
@@ -142,6 +145,7 @@ class RaCFormerTransformerDecoderLayer(BaseModule):
     def __init__(self, 
                  embed_dims, 
                  num_frames=8, 
+                 num_cams=6,
                  num_points=4, 
                  num_points_bev=4, 
                  num_levels=4, 
@@ -173,7 +177,12 @@ class RaCFormerTransformerDecoderLayer(BaseModule):
         )
 
         self.self_attn = ScaleAdaptiveSelfAttention(embed_dims, num_heads=8, dropout=0.1, pc_range=pc_range)
-        self.sampling = RaCFormerSampling(embed_dims, num_frames=num_frames, num_groups=4, num_points=num_points, num_levels=num_levels, depth_num=img_depth_num, pc_range=pc_range)
+        self.sampling = RaCFormerSampling(embed_dims, num_frames=num_frames,
+                                         num_cams=num_cams, num_groups=4,
+                                         num_points=num_points,
+                                         num_levels=num_levels,
+                                         depth_num=img_depth_num,
+                                         pc_range=pc_range)
 
         # self.sampling_radar_bev = BEVSampling(embed_dims, num_frames=num_frames, num_heads=4, num_points=num_points_bev, num_levels=1, pc_range=pc_range, depth_num=bev_depth_num, spatial_shapes=spatial_shapes, temp_radar=False)
         self.sampling_radar_bev = BEVSampling(embed_dims, num_frames=num_frames, num_heads=4, num_points=num_points_bev, num_levels=1, pc_range=pc_range, depth_num=bev_depth_num, spatial_shapes=spatial_shapes, temp_radar=True)
@@ -294,7 +303,7 @@ class ScaleAdaptiveSelfAttention(BaseModule):
         query_bbox: [B, Q, 10]
         query_feat: [B, Q, C]
         """
-        query_bbox = theta_d2xy_coods(query_bbox).clone()
+        query_bbox = theta_d2xy_coods(query_bbox, self.pc_range).clone()
         dist = self.calc_bbox_dists(query_bbox)
         tau = self.gen_tau(query_feat)  # [B, Q, 8]
 
@@ -333,10 +342,13 @@ class ScaleAdaptiveSelfAttention(BaseModule):
 
 class RaCFormerSampling(BaseModule):
     """Adaptive Spatio-temporal Sampling"""
-    def __init__(self, embed_dims=256, num_frames=4, num_groups=4, num_points=8, num_levels=4, depth_num=15, pc_range=[], init_cfg=None):
+    def __init__(self, embed_dims=256, num_frames=4, num_cams=6,
+                 num_groups=4, num_points=8, num_levels=4, depth_num=15,
+                 pc_range=[], init_cfg=None):
         super().__init__(init_cfg)
 
         self.num_frames = num_frames
+        self.num_cams = num_cams
         self.num_points = num_points
         self.num_groups = num_groups
         self.num_levels = num_levels
@@ -362,7 +374,7 @@ class RaCFormerSampling(BaseModule):
         B, Q, M = query_ray.shape
         image_h, image_w, _ = img_metas[0]['img_shape'][0]
 
-        query_bbox = theta_d2xy_coods(query_ray).clone()
+        query_bbox = theta_d2xy_coods(query_ray, self.pc_range).clone()
 
         # sampling offset of all frames
         sampling_offset = self.sampling_offset(query_feat)
@@ -386,7 +398,7 @@ class RaCFormerSampling(BaseModule):
         sampling_points[..., 0:1] = (sampling_points[..., 0:1] - self.pc_range[0]) / (self.pc_range[3] - self.pc_range[0])
         sampling_points[..., 1:2] = (sampling_points[..., 1:2] - self.pc_range[1]) / (self.pc_range[4] - self.pc_range[1])
         
-        sampling_points = xy2theta_d_coods(sampling_points)
+        sampling_points = xy2theta_d_coods(sampling_points, self.pc_range)
         sampling_points = sampling_points.reshape(B, Q, self.num_frames, self.num_groups, self.num_points, self.depth_num, 3)
         sampling_points_d = torch.linspace(-d_region, d_region, self.depth_num).view(1,1,self.depth_num).repeat(B, Q, 1).to(query_bbox.device)
         sampling_points_d = sampling_points_d + (self.ray_points_offset(query_feat).sigmoid()*2-1)*d_region/self.depth_num/2
@@ -395,7 +407,7 @@ class RaCFormerSampling(BaseModule):
         sampling_points = torch.cat((sampling_points[..., 0:1], sampling_points[..., 1:2]+sampling_points_d, sampling_points[..., 2:]), dim=-1)
         sampling_points = sampling_points.reshape(B, Q, self.num_frames, self.num_groups, self.num_points*self.depth_num, 3) 
 
-        sampling_points = theta_d2xy_coods(sampling_points)
+        sampling_points = theta_d2xy_coods(sampling_points, self.pc_range)
         sampling_points[..., 0:1] = sampling_points[..., 0:1] * (self.pc_range[3] - self.pc_range[0]) + self.pc_range[0]
         sampling_points[..., 1:2] = sampling_points[..., 1:2] * (self.pc_range[4] - self.pc_range[1]) + self.pc_range[1]       
 
@@ -409,7 +421,7 @@ class RaCFormerSampling(BaseModule):
             mlvl_feats,
             scale_weights,
             img_metas[0]['lidar2img'],
-            image_h, image_w
+            image_h, image_w, num_cams=self.num_cams
         )  # [B, Q, G, FP, C]
 
         return sampled_feats
@@ -483,7 +495,7 @@ class BEVSampling(BaseModule):
         B, Q, M = query_ray.shape
         bev_h, bev_w = bev_feats.shape[-2:]
 
-        query_bbox = theta_d2xy_coods(query_ray).clone()
+        query_bbox = theta_d2xy_coods(query_ray, self.pc_range).clone()
 
         # sampling offset of all frames
         sampling_offset = self.sampling_offset(query_feat)
@@ -505,7 +517,7 @@ class BEVSampling(BaseModule):
         sampling_points[..., 0:1] = (sampling_points[..., 0:1] - self.pc_range[0]) / (self.pc_range[3] - self.pc_range[0])
         sampling_points[..., 1:2] = (sampling_points[..., 1:2] - self.pc_range[1]) / (self.pc_range[4] - self.pc_range[1])
         
-        sampling_points = xy2theta_d_coods(sampling_points)
+        sampling_points = xy2theta_d_coods(sampling_points, self.pc_range)
         
         sampling_points = sampling_points.reshape(B, Q, self.num_frames, self.num_heads, self.num_points, self.depth_num, 2)
         sampling_points_d = torch.linspace(-d_region, d_region, self.depth_num).view(1,1,self.depth_num).repeat(B, Q, 1).to(query_bbox.device)
@@ -515,7 +527,7 @@ class BEVSampling(BaseModule):
         sampling_points = torch.cat((sampling_points[..., 0:1], sampling_points[..., 1:2]+sampling_points_d), dim=-1)
         sampling_points = sampling_points.reshape(B, Q, self.num_frames, self.num_heads, self.num_points*self.depth_num, 2)
 
-        sampling_points = theta_d2xy_coods(sampling_points)
+        sampling_points = theta_d2xy_coods(sampling_points, self.pc_range)
                 
         # scale weights
         sampling_points = sampling_points.permute(0,1,3,2,4,5).contiguous()

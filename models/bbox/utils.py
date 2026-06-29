@@ -79,23 +79,43 @@ def decode_bbox(bboxes, pc_range=None):
     else:
         return torch.cat([xyz, wlh, rot], dim=-1)
 
-def theta_d2xy_coods(theta_d_coords, map_size=102.4, r=65.0):
-    B, Q = theta_d_coords.shape[:2]
-    center = map_size / 2
+def _max_radius(pc_range):
+    x_max = max(abs(pc_range[0]), abs(pc_range[3]))
+    y_max = max(abs(pc_range[1]), abs(pc_range[4]))
+    return math.sqrt(x_max ** 2 + y_max ** 2)
+
+
+def theta_d2xy_coods(theta_d_coords, pc_range=None, map_size=102.4, r=65.0):
     xy_coords = theta_d_coords[..., :2].clone()
-    xy_coords[..., 0:1] = (center + theta_d_coords[..., 1:2]*r * torch.cos(theta_d_coords[..., 0:1]*(2 * torch.pi))) / map_size
-    xy_coords[..., 1:2] = (center + theta_d_coords[..., 1:2]*r * torch.sin(theta_d_coords[..., 0:1]*(2 * torch.pi))) / map_size
+    if pc_range is None:
+        center = map_size / 2
+        xy_coords[..., 0:1] = (center + theta_d_coords[..., 1:2] * r * torch.cos(theta_d_coords[..., 0:1] * (2 * torch.pi))) / map_size
+        xy_coords[..., 1:2] = (center + theta_d_coords[..., 1:2] * r * torch.sin(theta_d_coords[..., 0:1] * (2 * torch.pi))) / map_size
+    else:
+        radius = r if r is not None else _max_radius(pc_range)
+        x = theta_d_coords[..., 1:2] * radius * torch.cos(theta_d_coords[..., 0:1] * (2 * torch.pi))
+        y = theta_d_coords[..., 1:2] * radius * torch.sin(theta_d_coords[..., 0:1] * (2 * torch.pi))
+        xy_coords[..., 0:1] = (x - pc_range[0]) / (pc_range[3] - pc_range[0])
+        xy_coords[..., 1:2] = (y - pc_range[1]) / (pc_range[4] - pc_range[1])
     xy_coords = torch.clamp(xy_coords, min=0, max=1)
 
     return torch.cat([xy_coords, theta_d_coords[..., 2:]], dim=-1)
 
 
-def xy2theta_d_coods(xy_coords_norm, map_size=102.4, r=65.0, norm=True):
+def xy2theta_d_coods(xy_coords_norm, pc_range=None, map_size=102.4, r=65.0, norm=True):
     xy_coords = xy_coords_norm.clone()
-    center = map_size / 2
     if norm:
-        distances = torch.sqrt((xy_coords[..., 0:1]*map_size - center) ** 2 + (xy_coords[..., 1:2]*map_size - center) ** 2) / r
-        theta = torch.atan2(xy_coords[..., 1:2]*map_size - center, xy_coords[..., 0:1]*map_size - center)
+        if pc_range is None:
+            center = map_size / 2
+            x = xy_coords[..., 0:1] * map_size - center
+            y = xy_coords[..., 1:2] * map_size - center
+            radius = r
+        else:
+            x = xy_coords[..., 0:1] * (pc_range[3] - pc_range[0]) + pc_range[0]
+            y = xy_coords[..., 1:2] * (pc_range[4] - pc_range[1]) + pc_range[1]
+            radius = r if r is not None else _max_radius(pc_range)
+        distances = torch.sqrt(x ** 2 + y ** 2) / radius
+        theta = torch.atan2(y, x)
         theta = ((theta + 2 * torch.pi) % (2 * torch.pi)) / (2 * torch.pi)
         theta_d_coods = torch.cat((theta, distances), dim=-1)
     else:
@@ -104,4 +124,3 @@ def xy2theta_d_coods(xy_coords_norm, map_size=102.4, r=65.0, norm=True):
         theta = ((theta + 2 * torch.pi) % (2 * torch.pi))
         theta_d_coods = torch.cat((theta, distances), dim=-1)        
     return torch.cat([theta_d_coods, xy_coords[..., 2:]], dim=-1)
-

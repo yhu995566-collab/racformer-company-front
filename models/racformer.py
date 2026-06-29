@@ -31,6 +31,7 @@ class RaCFormer(MVXTwoStageDetector):
                  dep_downsample=16,
                  img_lss_neck=None,
                  img_lss_view_transformer=None,
+                 num_cams=6,
                  pre_process=None,
                  pts_neck=None,
                  radar_voxel_layer=None,
@@ -48,6 +49,7 @@ class RaCFormer(MVXTwoStageDetector):
                              pts_bbox_head, img_roi_head, img_rpn_head,
                              train_cfg, test_cfg, pretrained)
         self.data_aug = data_aug
+        self.num_cams = num_cams
         self.stop_prev_grad = stop_prev_grad
         self.color_aug = GpuPhotoMetricDistortion()
         self.grid_mask = GridMask(ratio=0.5, prob=0.7)
@@ -75,6 +77,8 @@ class RaCFormer(MVXTwoStageDetector):
         self.radar_voxel_layer = Voxelization(**radar_voxel_layer)
         self.radar_voxel_encoder = builder.build_voxel_encoder(radar_voxel_encoder)
         self.radar_middle_encoder = builder.build_middle_encoder(radar_middle_encoder)
+        self.radar_output_shape = tuple(radar_middle_encoder.output_shape)
+        self.radar_middle_channels = radar_middle_encoder.in_channels
 
         rad_conv_layers = []
         for i in range(3):
@@ -134,12 +138,18 @@ class RaCFormer(MVXTwoStageDetector):
             radar_point[:, 2] = 0
             radar_points[i] = radar_point
 
-        voxels, num_points, coors = self.radar_voxelize(radar_points)
+        batch_size = len(radar_points)
+        if sum(point.shape[0] for point in radar_points) == 0:
+            height, width = self.radar_output_shape
+            empty_bev = radar_points[0].new_zeros(
+                (batch_size, self.radar_middle_channels, height, width))
+            return self.radar_bev_conv(empty_bev)
+
+        voxels, num_points, coors, batch_size = self.radar_voxelize(radar_points)
         radar_features = self.radar_voxel_encoder(voxels, num_points, coors).to(torch.float32) ## pillar feature
 
-        batch_size = coors[-1, 0] + 1
-
-        radar_features = radar_features.squeeze()
+        if radar_features.dim() == 3 and radar_features.shape[1] == 1:
+            radar_features = radar_features.squeeze(1)
         rad_bev_feas = self.radar_middle_encoder(radar_features, coors, batch_size)
 
         rad_bev_feas = self.radar_bev_conv(rad_bev_feas)  
@@ -172,7 +182,7 @@ class RaCFormer(MVXTwoStageDetector):
             coors_batch.append(coor_pad)
         coors_batch = torch.cat(coors_batch, dim=0)
 
-        return voxels, num_points, coors_batch
+        return voxels, num_points, coors_batch, len(points)
     
     def extract_feat(self, img, radar_points, radar_depth, radar_rcs, img_metas):
         if isinstance(img, list):
@@ -181,7 +191,9 @@ class RaCFormer(MVXTwoStageDetector):
         assert img.dim() == 5
 
         B, NT, C, H, W = img.size()
-        N = 6 
+        N = self.num_cams
+        if NT % N != 0:
+            raise ValueError(f'Image count {NT} is not divisible by num_cams={N}')
         T = NT // N
         img = img.view(B * NT, C, H, W)
         img = img.float()
@@ -252,11 +264,12 @@ class RaCFormer(MVXTwoStageDetector):
                 img_meta_b = []
                 for b in range(B):
                     img_meta = dict()
-                    img_meta['lidar2img'] = img_metas[b]['lidar2img'][k*6:(k+1)*6]
-                    img_meta['img_shape'] = img_metas[b]['img_shape'][k*6:(k+1)*6]
+                    img_meta['lidar2img'] = img_metas[b]['lidar2img'][k*N:(k+1)*N]
+                    img_meta['img_shape'] = img_metas[b]['img_shape'][k*N:(k+1)*N]
                     img_meta_b.append(img_meta)
                 img_lss_feats_k = img_lss_feats[:,k].view(B, N, C_lss, h, w)
-                bev_feat, depth = self.img_lss_view_transformer(img_lss_feats_k, img_meta_b, mlp_input[:,k*6:(k+1)*6])   
+                bev_feat, depth = self.img_lss_view_transformer(
+                    img_lss_feats_k, img_meta_b, mlp_input[:, k*N:(k+1)*N])
                 if self.pre_process:
                     bev_feat = self.pre_process_net(bev_feat)[0]         
                 all_bev_feats.append(bev_feat)
@@ -271,11 +284,14 @@ class RaCFormer(MVXTwoStageDetector):
                     img_meta_b = []
                     for b in range(B):
                         img_meta = dict()
-                        img_meta['lidar2img'] = img_metas[b]['lidar2img'][(img_grad.shape[1]+k)*6:(img_grad.shape[1]+k+1)*6]
-                        img_meta['img_shape'] = img_metas[b]['img_shape'][(img_grad.shape[1]+k)*6:(img_grad.shape[1]+k+1)*6]
+                        start = (img_grad.shape[1] + k) * N
+                        img_meta['lidar2img'] = img_metas[b]['lidar2img'][start:start+N]
+                        img_meta['img_shape'] = img_metas[b]['img_shape'][start:start+N]
                         img_meta_b.append(img_meta)
                     img_lss_feats_nograd_k = img_lss_feats_nograd[:,k].view(B, N, C_lss, h, w)
-                    bev_feat_nograd, depth_nograd = self.img_lss_view_transformer(img_lss_feats_nograd_k, img_meta_b, mlp_input_nograd[:,k*6:(k+1)*6])            
+                    bev_feat_nograd, depth_nograd = self.img_lss_view_transformer(
+                        img_lss_feats_nograd_k, img_meta_b,
+                        mlp_input_nograd[:, k*N:(k+1)*N])
                     if self.pre_process:
                         bev_feat_nograd = self.pre_process_net(bev_feat_nograd)[0]
                     all_bev_feats.append(bev_feat_nograd)
@@ -286,8 +302,8 @@ class RaCFormer(MVXTwoStageDetector):
             img_feats = []
             for lvl in range(len(img_feats_fpn)):
                 C, H, W = img_feats_fpn[lvl].shape[-3:]
-                img_feat_lvl = img_feats_fpn[lvl].reshape(B, -1, 6, C, H, W)
-                img_feat_nograd_lvl = img_feats_fpn_nograd[lvl].reshape(B, -1, 6, C, H, W)
+                img_feat_lvl = img_feats_fpn[lvl].reshape(B, -1, N, C, H, W)
+                img_feat_nograd_lvl = img_feats_fpn_nograd[lvl].reshape(B, -1, N, C, H, W)
 
                 img_feat = torch.cat([img_feat_lvl, img_feat_nograd_lvl], dim=1)
                 img_feat = img_feat.reshape(-1, C, H, W)
@@ -308,14 +324,14 @@ class RaCFormer(MVXTwoStageDetector):
                 img_meta_b = []
                 for b in range(B):
                     img_meta = dict()
-                    img_meta['lidar2img'] = img_metas[b]['lidar2img'][i*6:(i+1)*6]
-                    img_meta['img_shape'] = img_metas[b]['img_shape'][i*6:(i+1)*6]
+                    img_meta['lidar2img'] = img_metas[b]['lidar2img'][i*N:(i+1)*N]
+                    img_meta['img_shape'] = img_metas[b]['img_shape'][i*N:(i+1)*N]
                     img_meta_b.append(img_meta)
                 if self.training:
                     if i==0:
                         pts_feats = self.extract_pts_feat(radar_points=radar_points[i])
 
-                        bev_feat, depth = self.img_lss_view_transformer(img_lss_feats[:, i*6:(i+1)*6], radar_depth[:, :, i], radar_rcs[:, :, i], img_meta_b, mlp_input[:,i*6:(i+1)*6])
+                        bev_feat, depth = self.img_lss_view_transformer(img_lss_feats[:, i*N:(i+1)*N], radar_depth[:, :, i], radar_rcs[:, :, i], img_meta_b, mlp_input[:,i*N:(i+1)*N])
                         if self.pre_process:
                             bev_feat = self.pre_process_net(bev_feat)[0]
                     else:
@@ -323,13 +339,13 @@ class RaCFormer(MVXTwoStageDetector):
                             self.eval()   
                             pts_feats = self.extract_pts_feat(radar_points=radar_points[i])
 
-                            bev_feat, depth = self.img_lss_view_transformer(img_lss_feats[:, i*6:(i+1)*6], radar_depth[:, :, i], radar_rcs[:, :, i], img_meta_b, mlp_input[:,i*6:(i+1)*6])
+                            bev_feat, depth = self.img_lss_view_transformer(img_lss_feats[:, i*N:(i+1)*N], radar_depth[:, :, i], radar_rcs[:, :, i], img_meta_b, mlp_input[:,i*N:(i+1)*N])
                             if self.pre_process:
                                 bev_feat = self.pre_process_net(bev_feat)[0]
                             self.train()   
                 else:
                     pts_feats = self.extract_pts_feat(radar_points=radar_points[i])
-                    bev_feat, depth = self.img_lss_view_transformer(img_lss_feats[:, i*6:(i+1)*6], radar_depth[:, :, i], radar_rcs[:, :, i], img_meta_b, mlp_input[:,i*6:(i+1)*6])
+                    bev_feat, depth = self.img_lss_view_transformer(img_lss_feats[:, i*N:(i+1)*N], radar_depth[:, :, i], radar_rcs[:, :, i], img_meta_b, mlp_input[:,i*N:(i+1)*N])
                     if self.pre_process:
                         bev_feat = self.pre_process_net(bev_feat)[0]
 
@@ -476,12 +492,13 @@ class RaCFormer(MVXTwoStageDetector):
         assert len(img_metas) == 1  # batch_size = 1
 
         B, N, C, H, W = img.shape
-        img = img.reshape(B, N//6, 6, C, H, W)
-        radar_depth = radar_depth.reshape(B, N//6, 6, 1, H, W)
-        radar_rcs = radar_rcs.reshape(B, N//6, 6, 1, H, W)
+        num_cams = self.num_cams
+        img = img.reshape(B, N//num_cams, num_cams, C, H, W)
+        radar_depth = radar_depth.reshape(B, N//num_cams, num_cams, 1, H, W)
+        radar_rcs = radar_rcs.reshape(B, N//num_cams, num_cams, 1, H, W)
 
         img_filenames = img_metas[0]['filename']
-        num_frames = len(img_filenames) // 6
+        num_frames = len(img_filenames) // num_cams
 
         img_shape = (H, W, C)
         img_metas[0]['img_shape'] = [img_shape for _ in range(len(img_filenames))]
@@ -491,7 +508,7 @@ class RaCFormer(MVXTwoStageDetector):
         img_feats_large, bev_feats_large, radar_bev_feats_large, img_metas_large, dep_large = [], [], [], [], []
 
         for i in range(num_frames):
-            img_indices = list(np.arange(i * 6, (i + 1) * 6))
+            img_indices = list(np.arange(i * num_cams, (i + 1) * num_cams))
 
             img_metas_curr = [{}]
             for k in img_metas[0].keys():
@@ -553,4 +570,3 @@ class RaCFormer(MVXTwoStageDetector):
             self.memory_radar_bev.pop(pop_key)
             
         return bbox_list
-

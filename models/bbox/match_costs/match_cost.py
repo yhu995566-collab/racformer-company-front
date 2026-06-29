@@ -33,8 +33,10 @@ class ThetaL1Cost(object):
          weight (int | float, optional): loss_weight
     """
 
-    def __init__(self, weight=1.0):
+    def __init__(self, weight=1.0,
+                 pc_range=(-51.2, -51.2, -5.0, 51.2, 51.2, 3.0)):
         self.weight = weight
+        self.pc_range = pc_range
 
     def __call__(self, bbox_pred, gt_bboxes):
         """
@@ -47,16 +49,16 @@ class ThetaL1Cost(object):
         Returns:
             torch.Tensor: bbox_cost value with weight
         """
-        pc_range = [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
+        pc_range = self.pc_range
+        pred_norm = bbox_pred.clone()
+        gt_norm = gt_bboxes.clone()
+        pred_norm[..., 0] = (pred_norm[..., 0] - pc_range[0]) / (pc_range[3] - pc_range[0])
+        pred_norm[..., 1] = (pred_norm[..., 1] - pc_range[1]) / (pc_range[4] - pc_range[1])
+        gt_norm[..., 0] = (gt_norm[..., 0] - pc_range[0]) / (pc_range[3] - pc_range[0])
+        gt_norm[..., 1] = (gt_norm[..., 1] - pc_range[1]) / (pc_range[4] - pc_range[1])
 
-        bbox_pred[..., 0] = (bbox_pred[..., 0] - pc_range[0]) / (pc_range[3] - pc_range[0])
-        bbox_pred[..., 1] = (bbox_pred[..., 1] - pc_range[1]) / (pc_range[4] - pc_range[1])
-        
-        gt_bboxes[..., 0] = (gt_bboxes[..., 0] - pc_range[0]) / (pc_range[3] - pc_range[0])
-        gt_bboxes[..., 1] = (gt_bboxes[..., 1] - pc_range[1]) / (pc_range[4] - pc_range[1])
-
-        theta_pred = xy2theta_d_coods(bbox_pred)[..., 0:1]
-        theta_gt = xy2theta_d_coods(gt_bboxes)[..., 0:1]
+        theta_pred = xy2theta_d_coods(pred_norm, pc_range)[..., 0:1]
+        theta_gt = xy2theta_d_coods(gt_norm, pc_range)[..., 0:1]
         theta_cost = torch.cdist(theta_pred, theta_gt, p=1)
         
         theta_cost = torch.abs(torch.remainder(theta_cost + 0.5, 1) - 0.5)

@@ -545,7 +545,6 @@ class DepthNet(nn.Module):
 
     def forward(self, x, radar_feats, rcs_embedding, mlp_input):
         BN, C, H, W = x.shape
-        B = BN //6
         mlp_input = self.bn(mlp_input.reshape(-1, mlp_input.shape[-1]))
         x = self.reduce_conv(x)
         if not self.depth_only:
@@ -571,8 +570,10 @@ class DepthNet(nn.Module):
 @NECKS.register_module()
 class LSSViewTransformerBEVDepth_racformer(LSSViewTransformer_racformer):
 
-    def __init__(self, loss_depth_weight=3.0, loss_reg_depth_weight=1.0, depthnet_cfg=dict(), **kwargs):
+    def __init__(self, loss_depth_weight=3.0, loss_reg_depth_weight=1.0,
+                 depthnet_cfg=dict(), num_cams=6, **kwargs):
         super(LSSViewTransformerBEVDepth_racformer, self).__init__(**kwargs)
+        self.num_cams = num_cams
         self.loss_depth_weight = loss_depth_weight
         self.depth_net = DepthNet(self.in_channels, self.in_channels,
                                   self.out_channels, self.D, **depthnet_cfg)
@@ -583,7 +584,7 @@ class LSSViewTransformerBEVDepth_racformer(LSSViewTransformer_racformer):
 
     def get_mlp_input(self, img_metas):
         B = len(img_metas)
-        N = 6
+        N = self.num_cams
         T = len(img_metas[0]['lidar2img']) // N    
         lidar2imgs = [img_meta['lidar2img'] for img_meta in img_metas]
         lidar2imgs = np.linalg.inv(np.stack(lidar2imgs))
@@ -697,5 +698,3 @@ class LSSViewTransformerBEVDepth_racformer(LSSViewTransformer_racformer):
         tran_feat = x[:, self.D:self.D + self.out_channels, ...]
         
         return self.view_transform(x, depth_digit, tran_feat, img_metas)
-
-

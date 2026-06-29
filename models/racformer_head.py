@@ -19,6 +19,7 @@ class RaCFormer_head(DETRHead):
                  query_denoising=True,
                  query_denoising_groups=10,
                  num_clusters=5,
+                 query_init_mode='polar',
                  bbox_coder=None,
                  code_size=10,
                  code_weights=[1.0] * 10,
@@ -33,8 +34,10 @@ class RaCFormer_head(DETRHead):
         self.test_cfg = test_cfg
         self.fp16_enabled = False
         self.embed_dims = in_channels
+        self.pc_range = bbox_coder['pc_range'] if isinstance(bbox_coder, dict) else bbox_coder.pc_range
 
         self.num_clusters = num_clusters
+        self.query_init_mode = query_init_mode
 
         super(RaCFormer_head, self).__init__(num_classes, in_channels, train_cfg=train_cfg, test_cfg=test_cfg, **kwargs)
 
@@ -67,8 +70,17 @@ class RaCFormer_head(DETRHead):
 
 
     def generate_points(self):
+        num_angles = self.num_query // self.num_clusters
+        if self.query_init_mode == 'front_grid':
+            x = torch.linspace(0, 1, self.num_clusters + 2, dtype=torch.float)[1:-1]
+            y = torch.linspace(0, 1, num_angles, dtype=torch.float)
+            x = x.view(1, self.num_clusters).expand(num_angles, self.num_clusters)
+            y = y.view(num_angles, 1).expand(num_angles, self.num_clusters)
+            xy = torch.stack([x, y], dim=-1).flatten(0, 1)
+            return xy2theta_d_coods(xy, self.pc_range)[..., :2]
 
-        num_angles = self.num_query//self.num_clusters
+        if self.query_init_mode != 'polar':
+            raise ValueError(f'Unknown query_init_mode: {self.query_init_mode}')
         angles = torch.linspace(0, 1, num_angles+1)[:-1]
         distances = torch.linspace(0, 1, self.num_clusters + 2,  dtype=torch.float)[1:-1]
 
@@ -172,7 +184,7 @@ class RaCFormer_head(DETRHead):
 
             wlh = known_bbox_expand[..., 3:6].clone()
             known_bbox_expand = encode_bbox(known_bbox_expand, self.pc_range)
-            known_bbox_expand = xy2theta_d_coods(known_bbox_expand)
+            known_bbox_expand = xy2theta_d_coods(known_bbox_expand, self.pc_range)
 
             # noise on the box
             if self.dn_bbox_noise_scale > 0:
