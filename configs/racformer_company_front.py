@@ -2,8 +2,8 @@ import torch
 pi = torch.pi
 
 dataset_type = 'CompanyFrontDataset'
-# `company_dataset` points to /mnt/diskNvme1/hyh/data/company_front.
-dataset_root = "company_dataset/processed/"
+# `data/company_dataset` resolves to the company dataset on the data disk.
+dataset_root = "data/company_dataset/processed/"
 
 input_modality = dict(
     use_lidar=False,
