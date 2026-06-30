@@ -9,6 +9,7 @@ which deliberately disables temporal motion compensation.
 Example with a manifest:
     python tools/convert_company_to_racformer.py \
         --manifest /path/to/frames.csv \
+        --calibration /path/to/company_calibration_20260630.json \
         --out-root /path/to/racformer_company
 
 Manifest columns:
@@ -128,6 +129,11 @@ def parse_args() -> argparse.Namespace:
     src.add_argument("--out-root", type=Path, required=True, help="Output dataset root.")
 
     calib = parser.add_argument_group("calibration")
+    calib.add_argument(
+        "--calibration",
+        type=Path,
+        help="Combined company calibration JSON containing camera, radar, and lidar matrices.",
+    )
     calib.add_argument("--intrinsic", type=Path, help="JSON/TXT/NPY camera intrinsic matrix.")
     calib.add_argument(
         "--camera-to-lidar",
@@ -231,6 +237,30 @@ def load_matrix(path: Optional[Path], default: np.ndarray, shape: Tuple[int, int
             value = np.array(rows, dtype=np.float32)
     value = value.reshape(shape).astype(np.float32)
     return value
+
+
+def load_calibration_bundle(path: Optional[Path]) -> Dict[str, np.ndarray]:
+    values = {
+        "intrinsic": DEFAULT_K,
+        "camera_to_lidar": DEFAULT_T_CAMERA_TO_LIDAR,
+        "radar_to_lidar": DEFAULT_T_RADAR_TO_LIDAR,
+        "lidar_to_ego": DEFAULT_T_LIDAR_TO_EGO,
+    }
+    if path is None:
+        return values
+
+    payload = json.loads(path.read_text())
+    values.update({
+        "intrinsic": np.asarray(
+            payload["camera"]["intrinsic"], dtype=np.float32).reshape(3, 3),
+        "camera_to_lidar": np.asarray(
+            payload["camera"]["camera_to_lidar"], dtype=np.float32).reshape(4, 4),
+        "radar_to_lidar": np.asarray(
+            payload["radar"]["radar_to_lidar"], dtype=np.float32).reshape(4, 4),
+        "lidar_to_ego": np.asarray(
+            payload["lidar"]["lidar_to_ego"], dtype=np.float32).reshape(4, 4),
+    })
+    return values
 
 
 def normalize_timestamp(value: str, unit: str) -> int:
@@ -623,15 +653,20 @@ def main() -> None:
     args.out_root = args.out_root.resolve()
     args.out_root.mkdir(parents=True, exist_ok=True)
 
-    k = load_matrix(args.intrinsic, DEFAULT_K, (3, 3))
+    calibration_path = args.calibration.resolve() if args.calibration else None
+    calibration = load_calibration_bundle(calibration_path)
+    if calibration_path:
+        print(f"Using calibration: {calibration_path}")
+
+    k = load_matrix(args.intrinsic, calibration["intrinsic"], (3, 3))
     t_camera_to_lidar = load_matrix(
-        args.camera_to_lidar, DEFAULT_T_CAMERA_TO_LIDAR, (4, 4))
+        args.camera_to_lidar, calibration["camera_to_lidar"], (4, 4))
     t_lidar_to_camera = load_matrix(
         args.lidar_to_camera, np.linalg.inv(t_camera_to_lidar), (4, 4))
     t_radar_to_lidar = load_matrix(
-        args.radar_to_lidar, DEFAULT_T_RADAR_TO_LIDAR, (4, 4))
+        args.radar_to_lidar, calibration["radar_to_lidar"], (4, 4))
     t_lidar_to_ego = load_matrix(
-        args.lidar_to_ego, DEFAULT_T_LIDAR_TO_EGO, (4, 4))
+        args.lidar_to_ego, calibration["lidar_to_ego"], (4, 4))
     if args.assume_radar_lidar_same_frame:
         t_radar_to_lidar = np.eye(4, dtype=np.float32)
     derived_radar_to_ego = t_lidar_to_ego @ t_radar_to_lidar
