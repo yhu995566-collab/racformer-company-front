@@ -256,11 +256,13 @@ def normalize_timestamp(value: str, unit: str) -> int:
 
 
 def read_manifest(path: Path, timestamp_unit: str) -> List[FrameRecord]:
+    path = path.resolve()
+
     def resolve(value: Optional[str]) -> Optional[Path]:
         if not value:
             return None
         item = Path(value)
-        return item if item.is_absolute() else path.parent / item
+        return item.resolve() if item.is_absolute() else (path.parent / item).resolve()
 
     records: List[FrameRecord] = []
     with path.open(newline="") as f:
@@ -312,21 +314,26 @@ def scan_dirs(args: argparse.Namespace) -> List[FrameRecord]:
 
     records: List[FrameRecord] = []
     for idx, (img, radar, lidar) in enumerate(zip(images, radars, lidars)):
+        stems = (img.stem, radar.stem, lidar.stem)
+        if len(set(stems)) != 1:
+            raise ValueError(
+                "Frame names do not match after sorting: "
+                f"image={img.name}, radar={radar.name}, lidar={lidar.name}")
         sample_id = img.stem
         gt_path = None
         if args.gt_dir:
             for suffix in (".json", ".txt", ".csv"):
                 candidate = args.gt_dir / f"{sample_id}{suffix}"
                 if candidate.exists():
-                    gt_path = candidate
+                    gt_path = candidate.resolve()
                     break
         records.append(
             FrameRecord(
                 sample_id=sample_id,
                 timestamp_us=int(round(idx * 1_000_000 / args.frame_rate)),
-                image_path=img,
-                radar_ply=radar,
-                lidar_ply=lidar,
+                image_path=img.resolve(),
+                radar_ply=radar.resolve(),
+                lidar_ply=lidar.resolve(),
                 gt_path=gt_path,
                 ego2global=np.eye(4, dtype=np.float32),
                 is_keyframe=gt_path is not None,
@@ -613,6 +620,7 @@ def dump_info(path: Path, infos: List[Dict]) -> None:
 
 def main() -> None:
     args = parse_args()
+    args.out_root = args.out_root.resolve()
     args.out_root.mkdir(parents=True, exist_ok=True)
 
     k = load_matrix(args.intrinsic, DEFAULT_K, (3, 3))
