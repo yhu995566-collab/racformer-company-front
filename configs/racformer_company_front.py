@@ -45,12 +45,11 @@ num_ray = 150
 num_query = num_ray * num_clusters
 
 ida_aug_conf = {
-    'resize_lim': (0.38, 0.55),
-    'final_dim': (256, 704),
+    'resize_lim': (1.0, 1.1),
+    'final_dim': (256, 640),
     'bot_pct_lim': (0.0, 0.0),
     'rot_lim': (0.0, 0.0),
-    # TODO: replace with the actual company camera image dimensions.
-    'H': 1080, 'W': 1920,
+    'H': 480, 'W': 640,
     'rand_flip': True,
 }
 
@@ -244,7 +243,7 @@ test_pipeline = [
          grid_config=grid_config, num_cams=num_cams, test_mode=True),
     dict(
         type='MultiScaleFlipAug3D',
-        img_scale=(1920, 1080),
+        img_scale=(640, 480),
         pts_scale_ratio=1,
         flip=False,
         transforms=[

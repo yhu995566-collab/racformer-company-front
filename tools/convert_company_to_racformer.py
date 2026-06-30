@@ -39,18 +39,29 @@ import numpy as np
 
 DEFAULT_K = np.array(
     [
-        [1481.62, 0.0, 979.99],
-        [0.0, 1491.83, 502.51],
+        [524.9667, 0.0, 329.8176],
+        [0.0, 529.8227, 237.9376],
         [0.0, 0.0, 1.0],
     ],
     dtype=np.float32,
 )
 
-DEFAULT_T_RADAR_TO_CAMERA = np.array(
+DEFAULT_T_CAMERA_TO_LIDAR = np.array(
     [
-        [0.923739, -0.380076, 0.047419, -1.0],
-        [0.016124, -0.085105, -0.996241, -1.9],
-        [0.382683, 0.921032, -0.072487, 0.0],
+        [0.984808, 0.166921, 0.047864, 0.0],
+        [0.0, 0.275637, -0.961262, 0.0],
+        [-0.173648, 0.946658, 0.271450, -2.9],
+        [0.0, 0.0, 0.0, 1.0],
+    ],
+    dtype=np.float32,
+)
+
+# Euler convention: R = Rz(yaw) @ Ry(pitch) @ Rx(roll), radians.
+DEFAULT_T_RADAR_TO_LIDAR = np.array(
+    [
+        [0.999487639, -0.031978269, 0.001360151, 0.0501],
+        [0.031994526, 0.999384833, -0.014363338, 0.4530],
+        [-0.000900000, 0.014399497, 0.999895917, 0.6756],
         [0.0, 0.0, 0.0, 1.0],
     ],
     dtype=np.float32,
@@ -113,14 +124,19 @@ def parse_args() -> argparse.Namespace:
     calib = parser.add_argument_group("calibration")
     calib.add_argument("--intrinsic", type=Path, help="JSON/TXT/NPY camera intrinsic matrix.")
     calib.add_argument(
-        "--radar-to-camera",
+        "--camera-to-lidar",
         type=Path,
-        help="JSON/TXT/NPY 4x4 T_radar_to_camera. Defaults to current known value.",
+        help="JSON/TXT/NPY 4x4 T_camera_to_lidar. Defaults to the 2026-06-30 calibration.",
+    )
+    calib.add_argument(
+        "--radar-to-lidar",
+        type=Path,
+        help="JSON/TXT/NPY 4x4 T_radar_to_lidar. Defaults to the current radar-front calibration.",
     )
     calib.add_argument(
         "--lidar-to-camera",
         type=Path,
-        help="JSON/TXT/NPY 4x4 T_lidar_to_camera. Defaults to T_radar_to_camera.",
+        help="Optional direct T_lidar_to_camera. Defaults to inverse(T_camera_to_lidar).",
     )
     calib.add_argument(
         "--radar-to-ego",
@@ -528,18 +544,23 @@ def main() -> None:
     args.out_root.mkdir(parents=True, exist_ok=True)
 
     k = load_matrix(args.intrinsic, DEFAULT_K, (3, 3))
-    t_radar_to_camera = load_matrix(args.radar_to_camera, DEFAULT_T_RADAR_TO_CAMERA, (4, 4))
-    t_lidar_to_camera = load_matrix(args.lidar_to_camera, t_radar_to_camera, (4, 4))
+    t_camera_to_lidar = load_matrix(
+        args.camera_to_lidar, DEFAULT_T_CAMERA_TO_LIDAR, (4, 4))
+    t_lidar_to_camera = load_matrix(
+        args.lidar_to_camera, np.linalg.inv(t_camera_to_lidar), (4, 4))
+    t_radar_to_lidar = load_matrix(
+        args.radar_to_lidar, DEFAULT_T_RADAR_TO_LIDAR, (4, 4))
     t_lidar_to_ego = load_matrix(
         args.lidar_to_ego, np.eye(4, dtype=np.float32), (4, 4))
-    derived_radar_to_ego = (
-        t_lidar_to_ego @ np.linalg.inv(t_lidar_to_camera) @ t_radar_to_camera)
+    if args.assume_radar_lidar_same_frame:
+        t_radar_to_lidar = np.eye(4, dtype=np.float32)
+    derived_radar_to_ego = t_lidar_to_ego @ t_radar_to_lidar
     t_radar_to_ego = load_matrix(
         args.radar_to_ego, derived_radar_to_ego, (4, 4))
     t_ego_to_camera = t_lidar_to_camera @ np.linalg.inv(t_lidar_to_ego)
     radar_in_ego = args.radar_in_ego or args.assume_radar_lidar_same_frame
     if not radar_in_ego and args.radar_to_ego is None:
-        print("INFO: derived T_radar_to_ego from camera calibration matrices.")
+        print("INFO: derived T_radar_to_ego from T_radar_to_lidar and T_lidar_to_ego.")
 
     records = read_manifest(args.manifest, args.timestamp_unit) if args.manifest else scan_dirs(args)
     if not records:
