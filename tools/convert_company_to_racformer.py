@@ -67,6 +67,18 @@ DEFAULT_T_RADAR_TO_LIDAR = np.array(
     dtype=np.float32,
 )
 
+# Native LiDAR axes: +x right, +y backward, +z downward.
+# Canonical model ego axes: +X forward, +Y left, +Z upward.
+DEFAULT_T_LIDAR_TO_EGO = np.array(
+    [
+        [0.0, -1.0, 0.0, 0.0],
+        [-1.0, 0.0, 0.0, 0.0],
+        [0.0, 0.0, -1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ],
+    dtype=np.float32,
+)
+
 NUSC_CAM_KEYS = [
     "CAM_FRONT",
     "CAM_FRONT_RIGHT",
@@ -146,7 +158,7 @@ def parse_args() -> argparse.Namespace:
     calib.add_argument(
         "--lidar-to-ego",
         type=Path,
-        help="Optional 4x4 T_lidar_to_ego. Defaults to identity.",
+        help="Optional T_lidar_to_ego. Defaults to x-right/y-back/z-down -> x-front/y-left/z-up.",
     )
     calib.add_argument(
         "--radar-in-ego",
@@ -551,14 +563,15 @@ def main() -> None:
     t_radar_to_lidar = load_matrix(
         args.radar_to_lidar, DEFAULT_T_RADAR_TO_LIDAR, (4, 4))
     t_lidar_to_ego = load_matrix(
-        args.lidar_to_ego, np.eye(4, dtype=np.float32), (4, 4))
+        args.lidar_to_ego, DEFAULT_T_LIDAR_TO_EGO, (4, 4))
     if args.assume_radar_lidar_same_frame:
         t_radar_to_lidar = np.eye(4, dtype=np.float32)
     derived_radar_to_ego = t_lidar_to_ego @ t_radar_to_lidar
     t_radar_to_ego = load_matrix(
         args.radar_to_ego, derived_radar_to_ego, (4, 4))
     t_ego_to_camera = t_lidar_to_camera @ np.linalg.inv(t_lidar_to_ego)
-    radar_in_ego = args.radar_in_ego or args.assume_radar_lidar_same_frame
+    radar_in_ego = args.radar_in_ego or np.allclose(
+        t_radar_to_ego, np.eye(4), atol=1e-6)
     if not radar_in_ego and args.radar_to_ego is None:
         print("INFO: derived T_radar_to_ego from T_radar_to_lidar and T_lidar_to_ego.")
 
@@ -662,7 +675,8 @@ def main() -> None:
                 "token": rec.sample_id,
                 "timestamp": int(rec.timestamp_us),
                 "lidar_path": str(lidar_path),
-                "lidar_in_ego": args.lidar_to_ego is None,
+                "lidar_in_ego": np.allclose(
+                    t_lidar_to_ego, np.eye(4), atol=1e-6),
                 "lidar2ego": t_lidar_to_ego.astype(np.float32),
                 "radar_path": str(radar_path),
                 "ego2global_translation": ego2global_translation,
