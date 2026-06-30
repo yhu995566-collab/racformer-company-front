@@ -2,8 +2,8 @@ import torch
 pi = torch.pi
 
 dataset_type = 'CompanyFrontDataset'
-# TODO: point this to the output of tools/convert_company_to_racformer.py.
-dataset_root = "/path/to/racformer_company/"
+# `data` is expected to be a symlink to the company dataset on the data disk.
+dataset_root = "data/processed/"
 
 input_modality = dict(
     use_lidar=False,
