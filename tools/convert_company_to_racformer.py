@@ -1,25 +1,18 @@
 #!/usr/bin/env python3
 """Convert company tri-modal frames into RaCFormer-style info files.
 
-This is a first-pass bridge script for data that already has images, radar
-PLY, LiDAR PLY, calibration, timestamps, sweeps, and optional GT. It does not
-try to fabricate the full nuScenes database. Instead it writes a compact
-`*_infos_sweep.pkl` that a custom RaCFormer loader can consume.
-
-The current RaCFormer pipeline still hardcodes six nuScenes cameras, five radar
-channels, and calls NuScenes.get() for radar aggregation. Use this converter as
-the data-prep half; the loader still needs a small custom path to read the
-generated radar files directly.
+This bridge consumes the complete temporal sequence, but emits training
+samples only for labeled keyframes. Unlabeled frames remain available as
+camera/radar sweeps. Missing ego poses are represented by identity matrices,
+which deliberately disables temporal motion compensation.
 
 Example with a manifest:
     python tools/convert_company_to_racformer.py \
         --manifest /path/to/frames.csv \
-        --out-root /path/to/racformer_company \
-        --repeat-single-camera-to-six \
-        --repeat-single-radar-to-five
+        --out-root /path/to/racformer_company
 
 Manifest columns:
-    sample_id,timestamp,image_path,radar_ply,lidar_ply,gt_path,ego_pose_path
+    sample_id,timestamp,image_path,radar_path,lidar_path,gt_path,is_keyframe,ego_pose_path
 
 `timestamp` may be seconds, milliseconds, microseconds, or nanoseconds. It is
 normalized to nuScenes-like integer microseconds.
@@ -119,6 +112,7 @@ class FrameRecord:
     lidar_ply: Path
     gt_path: Optional[Path] = None
     ego2global: Optional[np.ndarray] = None
+    is_keyframe: bool = False
 
 
 def parse_args() -> argparse.Namespace:
@@ -176,6 +170,12 @@ def parse_args() -> argparse.Namespace:
     split.add_argument("--test-ratio", type=float, default=0.0)
     split.add_argument("--keyframe-stride", type=int, default=1)
     split.add_argument("--num-sweeps", type=int, default=7)
+    split.add_argument("--frame-rate", type=float, default=4.0)
+    split.add_argument(
+        "--all-frames-as-keyframes",
+        action="store_true",
+        help="Use every frame as a keyframe. By default only labeled/marked frames are used.",
+    )
     split.add_argument(
         "--timestamp-unit",
         choices=["auto", "s", "ms", "us", "ns"],
@@ -256,27 +256,42 @@ def normalize_timestamp(value: str, unit: str) -> int:
 
 
 def read_manifest(path: Path, timestamp_unit: str) -> List[FrameRecord]:
+    def resolve(value: Optional[str]) -> Optional[Path]:
+        if not value:
+            return None
+        item = Path(value)
+        return item if item.is_absolute() else path.parent / item
+
     records: List[FrameRecord] = []
     with path.open(newline="") as f:
         reader = csv.DictReader(f)
-        required = {"sample_id", "timestamp", "image_path", "radar_ply", "lidar_ply"}
+        required = {"sample_id", "timestamp", "image_path"}
         missing = required - set(reader.fieldnames or [])
         if missing:
             raise ValueError(f"Manifest missing columns: {sorted(missing)}")
         for row in reader:
             gt = row.get("gt_path") or None
             ego_pose = row.get("ego_pose_path") or None
+            radar_path = row.get("radar_path") or row.get("radar_ply")
+            lidar_path = row.get("lidar_path") or row.get("lidar_ply")
+            if not radar_path or not lidar_path:
+                raise ValueError(
+                    "Each manifest row needs radar_path/lidar_path "
+                    "(legacy radar_ply/lidar_ply is also accepted).")
+            marked = str(row.get("is_keyframe", "")).strip().lower()
+            is_keyframe = marked in {"1", "true", "yes", "y"} or gt is not None
             records.append(
                 FrameRecord(
                     sample_id=row["sample_id"],
                     timestamp_us=normalize_timestamp(row["timestamp"], timestamp_unit),
-                    image_path=Path(row["image_path"]),
-                    radar_ply=Path(row["radar_ply"]),
-                    lidar_ply=Path(row["lidar_ply"]),
-                    gt_path=Path(gt) if gt else None,
+                    image_path=resolve(row["image_path"]),
+                    radar_ply=resolve(radar_path),
+                    lidar_ply=resolve(lidar_path),
+                    gt_path=resolve(gt),
                     ego2global=load_matrix(
-                        Path(ego_pose) if ego_pose else None,
+                        resolve(ego_pose),
                         np.eye(4, dtype=np.float32), (4, 4)),
+                    is_keyframe=is_keyframe,
                 )
             )
     return sorted(records, key=lambda rec: rec.timestamp_us)
@@ -308,12 +323,13 @@ def scan_dirs(args: argparse.Namespace) -> List[FrameRecord]:
         records.append(
             FrameRecord(
                 sample_id=sample_id,
-                timestamp_us=idx * 100_000,
+                timestamp_us=int(round(idx * 1_000_000 / args.frame_rate)),
                 image_path=img,
                 radar_ply=radar,
                 lidar_ply=lidar,
                 gt_path=gt_path,
                 ego2global=np.eye(4, dtype=np.float32),
+                is_keyframe=gt_path is not None,
             )
         )
     return records
@@ -369,7 +385,7 @@ PLY_DTYPE_MAP = {
 }
 
 
-def read_ply_vertices(path: Path) -> np.ndarray:
+def read_ply_vertices(path: Path) -> Tuple[np.ndarray, List[str]]:
     with path.open("rb") as f:
         fmt, vertex_count, properties, header_len = parse_ply_header(f)
         names = [name for _, name in properties]
@@ -377,43 +393,67 @@ def read_ply_vertices(path: Path) -> np.ndarray:
             data = np.loadtxt(f, max_rows=vertex_count, dtype=np.float32)
             if data.ndim == 1:
                 data = data.reshape(1, -1)
-            return data.astype(np.float32)
+            return data.astype(np.float32), names
         if fmt not in {"binary_little_endian", "binary_big_endian"}:
             raise ValueError(f"Unsupported PLY format: {fmt}")
         endian = "<" if fmt == "binary_little_endian" else ">"
         dtype = np.dtype([(name, endian + PLY_DTYPE_MAP[prop]) for prop, name in properties])
         f.seek(header_len)
         structured = np.fromfile(f, dtype=dtype, count=vertex_count)
-        return np.column_stack([structured[name] for name in names]).astype(np.float32)
+        data = np.column_stack([structured[name] for name in names]).astype(np.float32)
+        return data, names
 
 
-def pad_or_trim(points: np.ndarray, dim: int) -> np.ndarray:
-    if points.shape[1] >= dim:
-        return points[:, :dim].astype(np.float32)
-    pad = np.zeros((points.shape[0], dim - points.shape[1]), dtype=np.float32)
-    return np.concatenate([points.astype(np.float32), pad], axis=1)
+def columns_by_name(
+    points: np.ndarray, names: Sequence[str], required: Sequence[str]
+) -> Dict[str, np.ndarray]:
+    index = {name.lower(): idx for idx, name in enumerate(names)}
+    missing = [name for name in required if name not in index]
+    if missing:
+        raise ValueError(
+            f"PLY is missing fields {missing}; available fields are {list(names)}")
+    return {name: points[:, index[name]] for name in required}
 
 
-def convert_radar_points(points: np.ndarray, dim: int) -> np.ndarray:
+def convert_lidar_points(
+    points: np.ndarray, names: Sequence[str], dim: int
+) -> np.ndarray:
+    if dim < 4:
+        raise ValueError("LiDAR output dimension must be at least 4")
+    fields = columns_by_name(points, names, ("x", "y", "z", "intensity"))
+    out = np.zeros((points.shape[0], dim), dtype=np.float32)
+    out[:, 0] = fields["x"]
+    out[:, 1] = fields["y"]
+    out[:, 2] = fields["z"]
+    out[:, 3] = fields["intensity"]
+    return out
+
+
+def convert_radar_points(
+    points: np.ndarray, names: Sequence[str], dim: int
+) -> np.ndarray:
     """Map raw radar PLY columns to RaCFormer-friendly columns.
-
-    Current assumption:
-        raw columns start with x, y, z, ...
-        if there are 4 columns, column 3 is velocity or intensity-like
-        if there are 5 columns, column 4 is rcs
 
     Final columns are:
         x, y, z, rcs, vx, vy, time_lag
 
-    TODO: replace this mapping once the exact radar PLY property names and
-    velocity definition are confirmed.
+    Raw `v` is treated as radial velocity. Its sign convention still needs to
+    be checked against the radar documentation; the geometric decomposition
+    into the native radar x/y axes is deterministic.
     """
+    if dim < 7:
+        raise ValueError("Radar output dimension must be at least 7")
+    fields = columns_by_name(points, names, ("x", "y", "z", "v", "rcs"))
     out = np.zeros((points.shape[0], dim), dtype=np.float32)
-    out[:, : min(3, points.shape[1])] = points[:, : min(3, points.shape[1])]
-    if dim > 3 and points.shape[1] >= 5:
-        out[:, 3] = points[:, 4]
-    if dim > 4 and points.shape[1] >= 4:
-        out[:, 4] = points[:, 3]
+    out[:, 0] = fields["x"]
+    out[:, 1] = fields["y"]
+    out[:, 2] = fields["z"]
+    out[:, 3] = fields["rcs"]
+    distance_xy = np.hypot(fields["x"], fields["y"])
+    valid = distance_xy > 1e-6
+    out[valid, 4] = fields["v"][valid] * fields["x"][valid] / distance_xy[valid]
+    out[valid, 5] = fields["v"][valid] * fields["y"][valid] / distance_xy[valid]
+    # Column 6 is filled with the actual time lag by LoadCompanyRadarSweeps.
     return out
 
 
@@ -472,10 +512,14 @@ def make_cam_entry(
 def load_gt(gt_path: Optional[Path]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Load GT boxes if available.
 
-    Supported JSON format:
+    Supported compact JSON format:
         [
           {"box": [x, y, z, dx, dy, dz, yaw], "name": "car", "valid": true}
         ]
+
+    Supported SUSTechPOINTS JSON format:
+        [{"obj_type": "Car", "psr": {"position": ..., "scale": ...,
+          "rotation": {"z": yaw}}}]
 
     GT is expected in current keyframe LiDAR coordinates. If your annotation
     tool exports camera/global boxes, convert them before writing the final pkl.
@@ -490,8 +534,20 @@ def load_gt(gt_path: Optional[Path]) -> Tuple[np.ndarray, np.ndarray, np.ndarray
         items = json.loads(gt_path.read_text())
         boxes, names, valid = [], [], []
         for item in items:
-            boxes.append(item["box"])
-            names.append(item.get("name", "car"))
+            if "psr" in item:
+                psr = item["psr"]
+                position = psr["position"]
+                scale = psr["scale"]
+                rotation = psr["rotation"]
+                boxes.append([
+                    position["x"], position["y"], position["z"],
+                    scale["x"], scale["y"], scale["z"], rotation["z"],
+                ])
+                raw_name = item.get("obj_type", "car")
+            else:
+                boxes.append(item["box"])
+                raw_name = item.get("name", "car")
+            names.append(str(raw_name).strip().lower().replace(" ", "_"))
             valid.append(bool(item.get("valid", True)))
         return (
             np.asarray(boxes, dtype=np.float32).reshape(-1, 7),
@@ -518,8 +574,12 @@ def transform_boxes_to_ego(boxes: np.ndarray, lidar2ego: np.ndarray) -> np.ndarr
     return boxes
 
 
-def select_keyframes(records: Sequence[FrameRecord], stride: int) -> List[int]:
-    return list(range(0, len(records), max(1, stride)))
+def select_keyframes(
+    records: Sequence[FrameRecord], stride: int, all_frames: bool
+) -> List[int]:
+    candidates = list(range(len(records))) if all_frames else [
+        idx for idx, record in enumerate(records) if record.is_keyframe]
+    return candidates[::max(1, stride)]
 
 
 def previous_indices(index: int, num_sweeps: int) -> List[int]:
@@ -580,7 +640,12 @@ def main() -> None:
         raise ValueError("No frames found.")
 
     point_suffix = ".npy" if args.point_format == "npy" else ".bin"
-    keyframe_ids = select_keyframes(records, args.keyframe_stride)
+    keyframe_ids = select_keyframes(
+        records, args.keyframe_stride, args.all_frames_as_keyframes)
+    if not keyframe_ids:
+        raise ValueError(
+            "No keyframes found. Provide gt_path/is_keyframe in the manifest, "
+            "a matching --gt-dir, or use --all-frames-as-keyframes.")
     infos: List[Dict] = []
 
     for index in keyframe_ids:
@@ -591,8 +656,12 @@ def main() -> None:
         lidar2ego_translation = t_lidar_to_ego[:3, 3].astype(np.float32)
         lidar2ego_rotation = np.eye(3, dtype=np.float32)
 
-        lidar_points = pad_or_trim(read_ply_vertices(rec.lidar_ply), args.lidar_dim)
-        radar_points = convert_radar_points(read_ply_vertices(rec.radar_ply), args.radar_dim)
+        lidar_raw, lidar_fields = read_ply_vertices(rec.lidar_ply)
+        radar_raw, radar_fields = read_ply_vertices(rec.radar_ply)
+        lidar_points = convert_lidar_points(
+            lidar_raw, lidar_fields, args.lidar_dim)
+        radar_points = convert_radar_points(
+            radar_raw, radar_fields, args.radar_dim)
 
         lidar_path = write_points(
             lidar_points,
@@ -647,9 +716,10 @@ def main() -> None:
             )
             prev_radar_path = args.out_root / "radar" / f"{prev.sample_id}{point_suffix}"
             if not prev_radar_path.exists():
+                prev_radar_raw, prev_radar_fields = read_ply_vertices(
+                    prev.radar_ply)
                 prev_radar_points = convert_radar_points(
-                    read_ply_vertices(prev.radar_ply), args.radar_dim
-                )
+                    prev_radar_raw, prev_radar_fields, args.radar_dim)
                 write_points(prev_radar_points, prev_radar_path, args.point_format)
             sweep = {key: dict(prev_cam_entry) for key in cam_keys}
             raw_radar_to_prev_ego = (
