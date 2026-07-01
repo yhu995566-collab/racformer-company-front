@@ -9,7 +9,7 @@ import torch.distributed
 import torch.distributed as dist
 import torch.backends.cudnn as cudnn
 import mmcv
-from mmcv import Config
+from mmcv import Config, DictAction
 from mmcv.parallel import MMDataParallel, MMDistributedDataParallel
 from mmcv.runner import load_checkpoint
 from mmdet.apis import set_random_seed, multi_gpu_test, single_gpu_test
@@ -42,10 +42,13 @@ def main():
     parser.add_argument('--bev-iou-threshold', type=float, default=0.5)
     parser.add_argument('--iou-3d-threshold', type=float, default=0.5)
     parser.add_argument('--skip-eval', action='store_true')
+    parser.add_argument('--override', nargs='+', action=DictAction)
     args = parser.parse_args()
 
     # parse configs
     cfgs = Config.fromfile(args.config)
+    if args.override is not None:
+        cfgs.merge_from_dict(args.override)
 
     # register custom module
     importlib.import_module('models')
