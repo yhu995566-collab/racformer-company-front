@@ -41,11 +41,11 @@ DEFAULT_K = np.array(
     dtype=np.float32,
 )
 
-DEFAULT_T_CAMERA_TO_LIDAR = np.array(
+DEFAULT_T_LIDAR_TO_CAMERA = np.array(
     [
-        [0.984808, 0.166921, 0.047864, 0.0],
-        [0.0, 0.275637, -0.961262, 0.0],
-        [-0.173648, 0.946658, 0.271450, -2.9],
+        [0.971997, 0.203986, 0.116673, -0.7],
+        [0.067969, 0.231232, -0.970521, 0.9],
+        [-0.224951, 0.951274, 0.210892, -3.4],
         [0.0, 0.0, 0.0, 1.0],
     ],
     dtype=np.float32,
@@ -139,7 +139,7 @@ def parse_args() -> argparse.Namespace:
     calib.add_argument(
         "--camera-to-lidar",
         type=Path,
-        help="JSON/TXT/NPY 4x4 T_camera_to_lidar. Defaults to the 2026-06-30 calibration.",
+        help="Optional legacy JSON/TXT/NPY 4x4 T_camera_to_lidar.",
     )
     calib.add_argument(
         "--radar-to-lidar",
@@ -149,7 +149,7 @@ def parse_args() -> argparse.Namespace:
     calib.add_argument(
         "--lidar-to-camera",
         type=Path,
-        help="Optional direct T_lidar_to_camera. Defaults to inverse(T_camera_to_lidar).",
+        help="Optional direct T_lidar_to_camera. Defaults to the 2026-07-01 calibration.",
     )
     calib.add_argument(
         "--radar-to-ego",
@@ -243,8 +243,8 @@ def load_matrix(path: Optional[Path], default: np.ndarray, shape: Tuple[int, int
 def load_calibration_bundle(path: Optional[Path]) -> Dict[str, np.ndarray]:
     values = {
         "intrinsic": DEFAULT_K,
-        "camera_to_lidar": DEFAULT_T_CAMERA_TO_LIDAR,
-        "lidar_to_camera": np.linalg.inv(DEFAULT_T_CAMERA_TO_LIDAR),
+        "camera_to_lidar": np.linalg.inv(DEFAULT_T_LIDAR_TO_CAMERA),
+        "lidar_to_camera": DEFAULT_T_LIDAR_TO_CAMERA,
         "radar_to_lidar": DEFAULT_T_RADAR_TO_LIDAR,
         "lidar_to_ego": DEFAULT_T_LIDAR_TO_EGO,
     }
