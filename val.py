@@ -1,4 +1,5 @@
 import os
+from os import path as osp
 import utils
 import logging
 import argparse
@@ -7,6 +8,7 @@ import torch
 import torch.distributed
 import torch.distributed as dist
 import torch.backends.cudnn as cudnn
+import mmcv
 from mmcv import Config
 from mmcv.parallel import MMDataParallel, MMDistributedDataParallel
 from mmcv.runner import load_checkpoint
@@ -16,35 +18,15 @@ from mmdet3d.models import build_model
 from models.utils import VERSION
 
 
-def evaluate(dataset, results, epoch):
-    metrics = dataset.evaluate(results, jsonfile_prefix='submission_mini')
-
-    mAP = metrics['pts_bbox_NuScenes/mAP']
-    mATE = metrics['pts_bbox_NuScenes/mATE']
-    mASE = metrics['pts_bbox_NuScenes/mASE']
-    mAOE = metrics['pts_bbox_NuScenes/mAOE']
-    mAVE = metrics['pts_bbox_NuScenes/mAVE']
-    mAAE = metrics['pts_bbox_NuScenes/mAAE']
-    NDS = metrics['pts_bbox_NuScenes/NDS']
-
-    logging.info('--- Evaluation Results (Epoch %d) ---' % epoch)
-    logging.info('mAP: %.4f' % metrics['pts_bbox_NuScenes/mAP'])
-    logging.info('mATE: %.4f' % metrics['pts_bbox_NuScenes/mATE'])
-    logging.info('mASE: %.4f' % metrics['pts_bbox_NuScenes/mASE'])
-    logging.info('mAOE: %.4f' % metrics['pts_bbox_NuScenes/mAOE'])
-    logging.info('mAVE: %.4f' % metrics['pts_bbox_NuScenes/mAVE'])
-    logging.info('mAAE: %.4f' % metrics['pts_bbox_NuScenes/mAAE'])
-    logging.info('NDS: %.4f' % metrics['pts_bbox_NuScenes/NDS'])
-
-    return {
-        'mAP': mAP,
-        'mATE': mATE,
-        'mASE': mASE,
-        'mAOE': mAOE,
-        'mAVE': mAVE,
-        'mAAE': mAAE,
-        'NDS': NDS,
-    }
+def evaluate(dataset, results, **kwargs):
+    metrics = dataset.evaluate(results, **kwargs)
+    logging.info('--- Evaluation Results ---')
+    for name, value in metrics.items():
+        if isinstance(value, (float, int)):
+            logging.info('%s: %.4f', name, value)
+        else:
+            logging.info('%s: %s', name, value)
+    return metrics
 
 
 def main():
@@ -54,6 +36,12 @@ def main():
     parser.add_argument('--local_rank', type=int, default=0)
     parser.add_argument('--world_size', type=int, default=1)
     parser.add_argument('--batch_size', type=int, default=1)
+    parser.add_argument('--split', choices=('val', 'test'), default='val')
+    parser.add_argument('--out', help='Optional PKL path for raw predictions')
+    parser.add_argument('--score-threshold', type=float, default=0.1)
+    parser.add_argument('--bev-iou-threshold', type=float, default=0.5)
+    parser.add_argument('--iou-3d-threshold', type=float, default=0.5)
+    parser.add_argument('--skip-eval', action='store_true')
     args = parser.parse_args()
 
     # parse configs
@@ -97,8 +85,9 @@ def main():
     set_random_seed(0, deterministic=True)
     cudnn.benchmark = True
 
-    logging.info('Loading validation set from %s' % cfgs.data.val.data_root)
-    val_dataset = build_dataset(cfgs.data.val)
+    dataset_cfg = cfgs.data[args.split]
+    logging.info('Loading %s set from %s', args.split, dataset_cfg.data_root)
+    val_dataset = build_dataset(dataset_cfg)
     val_loader = build_dataloader(
         val_dataset,
         samples_per_gpu=args.batch_size,
@@ -133,7 +122,18 @@ def main():
         results = single_gpu_test(model, val_loader)
 
     if local_rank == 0:
-        evaluate(val_dataset, results, -1)
+        if args.out:
+            mmcv.mkdir_or_exist(osp.dirname(osp.abspath(args.out)))
+            mmcv.dump(results, args.out)
+            logging.info('Predictions saved to %s', args.out)
+        if not args.skip_eval:
+            eval_kwargs = {}
+            if val_dataset.__class__.__name__ == 'CompanyFrontDataset':
+                eval_kwargs = dict(
+                    score_threshold=args.score_threshold,
+                    bev_iou_threshold=args.bev_iou_threshold,
+                    iou_3d_threshold=args.iou_3d_threshold)
+            evaluate(val_dataset, results, **eval_kwargs)
 
 
 if __name__ == '__main__':

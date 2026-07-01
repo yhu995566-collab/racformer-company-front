@@ -113,7 +113,8 @@ def box_corners(box):
     return local @ rotation.T + np.array([x, y, z], dtype=np.float32)
 
 
-def draw_image_boxes(axis, boxes, names, projection, image_shape):
+def draw_image_boxes(axis, boxes, names, projection, image_shape,
+                     color="lime"):
     for box, name in zip(boxes, names):
         corners = box_corners(box)
         uv, depth, _ = project(corners, projection, image_shape)
@@ -122,21 +123,21 @@ def draw_image_boxes(axis, boxes, names, projection, image_shape):
                 axis.plot(
                     [uv[start, 0], uv[end, 0]],
                     [uv[start, 1], uv[end, 1]],
-                    color="lime", linewidth=1.5)
+                    color=color, linewidth=1.5)
         center_uv, _, center_valid = project(
             np.asarray([box[:3]], dtype=np.float32), projection, image_shape)
         if center_valid[0]:
             axis.text(
-                center_uv[0, 0], center_uv[0, 1], str(name), color="lime",
+                center_uv[0, 0], center_uv[0, 1], str(name), color=color,
                 fontsize=7, bbox=dict(facecolor="black", alpha=0.5, pad=1))
 
 
-def draw_bev_boxes(axis, boxes, names):
+def draw_bev_boxes(axis, boxes, names, color="lime"):
     for box, name in zip(boxes, names):
         corners = box_corners(box)[:4]
         polygon = np.concatenate([corners, corners[:1]], axis=0)
-        axis.plot(-polygon[:, 1], polygon[:, 0], color="lime", linewidth=1.5)
-        axis.text(-box[1], box[0], str(name), color="darkgreen", fontsize=7)
+        axis.plot(-polygon[:, 1], polygon[:, 0], color=color, linewidth=1.5)
+        axis.text(-box[1], box[0], str(name), color=color, fontsize=7)
 
 
 def select_indices(length, requested, count):
