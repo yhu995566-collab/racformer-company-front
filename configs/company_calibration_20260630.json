@@ -5,8 +5,6 @@
     "radar_euler_order": "Rz(yaw) @ Ry(pitch) @ Rx(roll)",
     "radar_rotation_unit": "radian",
     "lidar_native_axes": "+x right, +y forward, +z downward",
-    "camera_calibration_input_axes": "+x right, +y forward, +z upward",
-    "camera_matrix_includes_raw_z_flip": true,
     "model_ego_axes": "+X forward, +Y left, +Z upward"
   },
   "lidar": {
@@ -24,9 +22,9 @@
       [0.0, 0.0, 1.0]
     ],
     "lidar_to_camera": [
-      [0.971997, 0.203986, -0.116673, -0.7],
-      [0.067969, 0.231232, 0.970521, 0.9],
-      [-0.224951, 0.951274, -0.210892, -3.4],
+      [0.971997, 0.203986, 0.116673, -0.7],
+      [0.067969, 0.231232, -0.970521, 0.9],
+      [-0.224951, 0.951274, 0.210892, -3.4],
       [0.0, 0.0, 0.0, 1.0]
     ]
   },
