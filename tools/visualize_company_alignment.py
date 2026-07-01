@@ -135,8 +135,8 @@ def draw_bev_boxes(axis, boxes, names):
     for box, name in zip(boxes, names):
         corners = box_corners(box)[:4]
         polygon = np.concatenate([corners, corners[:1]], axis=0)
-        axis.plot(polygon[:, 1], polygon[:, 0], color="lime", linewidth=1.5)
-        axis.text(box[1], box[0], str(name), color="darkgreen", fontsize=7)
+        axis.plot(-polygon[:, 1], polygon[:, 0], color="lime", linewidth=1.5)
+        axis.text(-box[1], box[0], str(name), color="darkgreen", fontsize=7)
 
 
 def select_indices(length, requested, count):
@@ -188,15 +188,20 @@ def render_sample(info, output_path, camera_key, radar_key,
     image_axis.axis("off")
     image_axis.legend(loc="upper right")
 
-    bev_axis.scatter(lidar[:, 1], lidar[:, 0], s=0.3, c="gray", alpha=0.4,
+    # Screen-right is vehicle-right (-ego Y), while forward (+ego X) is up.
+    bev_axis.scatter(-lidar[:, 1], lidar[:, 0], s=0.3, c="gray", alpha=0.4,
                      label="LiDAR")
-    bev_axis.scatter(radar[:, 1], radar[:, 0], s=5, c="tab:blue", alpha=0.8,
+    bev_axis.scatter(-radar[:, 1], radar[:, 0], s=5, c="tab:blue", alpha=0.8,
                      label="Radar")
     draw_bev_boxes(bev_axis, boxes, names)
-    bev_axis.set_xlim(ROI[1], ROI[4])
+    bev_axis.scatter(0.0, 0.0, marker="^", s=80, c="red", label="Ego")
+    bev_axis.annotate(
+        "FRONT", xy=(0.0, 4.0), xytext=(0.0, 0.8), ha="center",
+        color="red", arrowprops=dict(arrowstyle="->", color="red"))
+    bev_axis.set_xlim(-ROI[4], -ROI[1])
     bev_axis.set_ylim(ROI[0], ROI[3])
     bev_axis.set_aspect("equal", adjustable="box")
-    bev_axis.set_xlabel("Ego Y: left (+), right (-) [m]")
+    bev_axis.set_xlabel("Vehicle lateral: left (-), right (+) [m]")
     bev_axis.set_ylabel("Ego X: forward (+) [m]")
     bev_axis.set_title("Front BEV")
     bev_axis.grid(True, linewidth=0.4, alpha=0.4)
