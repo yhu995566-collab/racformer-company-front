@@ -14,10 +14,8 @@ from PIL import Image
 from matplotlib.lines import Line2D
 
 from visualize_company_alignment import (
-    ROI,
     draw_bev_boxes,
     draw_image_boxes,
-    filter_roi,
     lidar2img,
     load_points,
     project,
@@ -44,7 +42,10 @@ def parse_args():
     parser.add_argument("--indices", nargs="*", type=int)
     parser.add_argument("--num-samples", type=int, default=12)
     parser.add_argument("--camera-key", default="CAM_FRONT")
-    parser.add_argument("--max-lidar-points", type=int, default=30000)
+    parser.add_argument("--radar-key", default="RADAR_FRONT")
+    parser.add_argument("--max-radar-points", type=int, default=15000)
+    parser.add_argument("--bev-forward-range", type=float, default=300.0)
+    parser.add_argument("--bev-lateral-range", type=float, default=60.0)
     return parser.parse_args()
 
 
@@ -64,14 +65,19 @@ def prediction_fields(result, score_threshold):
 
 def render(info, result, output_path, args, class_names, data_root):
     cam = info["cams"][args.camera_key]
+    radar_info = info["rads"][args.radar_key]
     image = np.asarray(
         Image.open(resolve_path(cam["data_path"], data_root)).convert("RGB"))
     projection = lidar2img(cam)
 
-    lidar = load_points(info["lidar_path"], 5, data_root)
-    if not info.get("lidar_in_ego", True):
-        lidar = transform_points(lidar, info["lidar2ego"])
-    lidar = subsample(filter_roi(lidar), args.max_lidar_points)
+    radar = load_points(radar_info["data_path"], 7, data_root)
+    if not radar_info.get("radar_in_ego", True):
+        radar = transform_points(radar, radar_info["radar2ego"])
+    radar = radar[
+        (radar[:, 0] >= 0.0) &
+        (radar[:, 0] <= args.bev_forward_range) &
+        (np.abs(radar[:, 1]) <= args.bev_lateral_range)]
+    radar = subsample(radar, args.max_radar_points)
 
     gt_boxes = np.asarray(info.get("gt_boxes", []), dtype=np.float32).reshape(-1, 7)
     gt_names = np.asarray(info.get("gt_names", []))
@@ -85,10 +91,10 @@ def render(info, result, output_path, args, class_names, data_root):
     figure, axes = plt.subplots(1, 2, figsize=(16, 7), constrained_layout=True)
     image_axis, bev_axis = axes
     image_axis.imshow(image)
-    uv, depth, valid = project(lidar[:, :3], projection, image.shape)
+    uv, depth, valid = project(radar[:, :3], projection, image.shape)
     image_axis.scatter(
         uv[valid, 0], uv[valid, 1], c=depth[valid], cmap="turbo_r",
-        s=1, alpha=0.35, vmin=ROI[0], vmax=ROI[3])
+        s=7, alpha=0.8, vmin=0.0, vmax=args.bev_forward_range)
     draw_image_boxes(
         image_axis, gt_boxes, gt_names, projection, image.shape, color="lime")
     draw_image_boxes(
@@ -103,23 +109,23 @@ def render(info, result, output_path, args, class_names, data_root):
     ], loc="upper right")
 
     bev_axis.scatter(
-        -lidar[:, 1], lidar[:, 0], s=0.3, c="gray", alpha=0.35,
-        label="LiDAR")
+        -radar[:, 1], radar[:, 0], s=6, c="tab:blue", alpha=0.75,
+        label="Radar")
     draw_bev_boxes(bev_axis, gt_boxes, gt_names, color="lime")
     draw_bev_boxes(bev_axis, pred_boxes, pred_names, color="red")
     bev_axis.scatter(0.0, 0.0, marker="^", s=80, c="blue", label="Ego")
     bev_axis.annotate(
         "FRONT", xy=(0.0, 4.0), xytext=(0.0, 0.8), ha="center",
         color="blue", arrowprops=dict(arrowstyle="->", color="blue"))
-    bev_axis.set_xlim(-ROI[4], -ROI[1])
-    bev_axis.set_ylim(ROI[0], ROI[3])
+    bev_axis.set_xlim(-args.bev_lateral_range, args.bev_lateral_range)
+    bev_axis.set_ylim(0.0, args.bev_forward_range)
     bev_axis.set_aspect("equal", adjustable="box")
     bev_axis.set_xlabel("Vehicle lateral: left (-), right (+) [m]")
     bev_axis.set_ylabel("Ego X: forward (+) [m]")
     bev_axis.set_title("Front BEV: GT green, prediction red")
     bev_axis.grid(True, linewidth=0.4, alpha=0.4)
     bev_axis.legend(handles=[
-        Line2D([0], [0], marker=".", color="gray", lw=0, label="LiDAR"),
+        Line2D([0], [0], marker=".", color="tab:blue", lw=0, label="Radar"),
         Line2D([0], [0], color="lime", lw=2, label="Ground truth"),
         Line2D([0], [0], color="red", lw=2, label="Prediction"),
         Line2D([0], [0], marker="^", color="blue", lw=0, label="Ego"),
