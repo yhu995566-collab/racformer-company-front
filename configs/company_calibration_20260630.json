@@ -4,12 +4,12 @@
     "radar_matrix": "T_radar_to_lidar",
     "radar_euler_order": "Rz(yaw) @ Ry(pitch) @ Rx(roll)",
     "radar_rotation_unit": "radian",
-    "lidar_native_axes": "+x right, +y backward, +z downward",
+    "lidar_native_axes": "+x right, +y forward, +z downward",
     "model_ego_axes": "+X forward, +Y left, +Z upward"
   },
   "lidar": {
     "lidar_to_ego": [
-      [0.0, -1.0, 0.0, 0.0],
+      [0.0, 1.0, 0.0, 0.0],
       [-1.0, 0.0, 0.0, 0.0],
       [0.0, 0.0, -1.0, 0.0],
       [0.0, 0.0, 0.0, 1.0]

@@ -62,11 +62,11 @@ DEFAULT_T_RADAR_TO_LIDAR = np.array(
     dtype=np.float32,
 )
 
-# Native LiDAR axes: +x right, +y backward, +z downward.
+# Native LiDAR axes: +x right, +y forward, +z downward.
 # Canonical model ego axes: +X forward, +Y left, +Z upward.
 DEFAULT_T_LIDAR_TO_EGO = np.array(
     [
-        [0.0, -1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
         [-1.0, 0.0, 0.0, 0.0],
         [0.0, 0.0, -1.0, 0.0],
         [0.0, 0.0, 0.0, 1.0],
@@ -159,7 +159,7 @@ def parse_args() -> argparse.Namespace:
     calib.add_argument(
         "--lidar-to-ego",
         type=Path,
-        help="Optional T_lidar_to_ego. Defaults to x-right/y-back/z-down -> x-front/y-left/z-up.",
+        help="Optional T_lidar_to_ego. Defaults to x-right/y-forward/z-down -> x-forward/y-left/z-up.",
     )
     calib.add_argument(
         "--radar-in-ego",
