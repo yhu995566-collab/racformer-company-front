@@ -1,6 +1,6 @@
 {
   "conventions": {
-    "camera_matrix": "T_camera_to_lidar",
+    "camera_matrix": "T_lidar_to_camera",
     "radar_matrix": "T_radar_to_lidar",
     "radar_euler_order": "Rz(yaw) @ Ry(pitch) @ Rx(roll)",
     "radar_rotation_unit": "radian",
@@ -21,7 +21,7 @@
       [0.0, 529.8227, 237.9376],
       [0.0, 0.0, 1.0]
     ],
-    "camera_to_lidar": [
+    "lidar_to_camera": [
       [0.984808, 0.166921, 0.047864, 0.0],
       [0.0, 0.275637, -0.961262, 0.0],
       [-0.173648, 0.946658, 0.27145, -2.9],

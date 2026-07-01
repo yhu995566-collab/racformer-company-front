@@ -244,6 +244,7 @@ def load_calibration_bundle(path: Optional[Path]) -> Dict[str, np.ndarray]:
     values = {
         "intrinsic": DEFAULT_K,
         "camera_to_lidar": DEFAULT_T_CAMERA_TO_LIDAR,
+        "lidar_to_camera": np.linalg.inv(DEFAULT_T_CAMERA_TO_LIDAR),
         "radar_to_lidar": DEFAULT_T_RADAR_TO_LIDAR,
         "lidar_to_ego": DEFAULT_T_LIDAR_TO_EGO,
     }
@@ -251,11 +252,24 @@ def load_calibration_bundle(path: Optional[Path]) -> Dict[str, np.ndarray]:
         return values
 
     payload = json.loads(path.read_text())
+    camera = payload["camera"]
+    if "lidar_to_camera" in camera:
+        lidar_to_camera = np.asarray(
+            camera["lidar_to_camera"], dtype=np.float32).reshape(4, 4)
+        camera_to_lidar = np.linalg.inv(lidar_to_camera)
+    elif "camera_to_lidar" in camera:
+        camera_to_lidar = np.asarray(
+            camera["camera_to_lidar"], dtype=np.float32).reshape(4, 4)
+        lidar_to_camera = np.linalg.inv(camera_to_lidar)
+    else:
+        raise KeyError(
+            "camera calibration requires lidar_to_camera or camera_to_lidar")
+
     values.update({
         "intrinsic": np.asarray(
-            payload["camera"]["intrinsic"], dtype=np.float32).reshape(3, 3),
-        "camera_to_lidar": np.asarray(
-            payload["camera"]["camera_to_lidar"], dtype=np.float32).reshape(4, 4),
+            camera["intrinsic"], dtype=np.float32).reshape(3, 3),
+        "camera_to_lidar": camera_to_lidar.astype(np.float32),
+        "lidar_to_camera": lidar_to_camera.astype(np.float32),
         "radar_to_lidar": np.asarray(
             payload["radar"]["radar_to_lidar"], dtype=np.float32).reshape(4, 4),
         "lidar_to_ego": np.asarray(
@@ -662,8 +676,12 @@ def main() -> None:
     k = load_matrix(args.intrinsic, calibration["intrinsic"], (3, 3))
     t_camera_to_lidar = load_matrix(
         args.camera_to_lidar, calibration["camera_to_lidar"], (4, 4))
+    default_lidar_to_camera = (
+        np.linalg.inv(t_camera_to_lidar)
+        if args.camera_to_lidar is not None
+        else calibration["lidar_to_camera"])
     t_lidar_to_camera = load_matrix(
-        args.lidar_to_camera, np.linalg.inv(t_camera_to_lidar), (4, 4))
+        args.lidar_to_camera, default_lidar_to_camera, (4, 4))
     t_radar_to_lidar = load_matrix(
         args.radar_to_lidar, calibration["radar_to_lidar"], (4, 4))
     t_lidar_to_ego = load_matrix(
