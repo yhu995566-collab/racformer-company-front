@@ -11,6 +11,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
+from matplotlib.lines import Line2D
 
 from visualize_company_alignment import (
     ROI,
@@ -94,6 +95,10 @@ def render(info, result, output_path, args, class_names):
     image_axis.set_ylim(image.shape[0], 0)
     image_axis.set_title("Image: GT green, prediction red")
     image_axis.axis("off")
+    image_axis.legend(handles=[
+        Line2D([0], [0], color="lime", lw=2, label="Ground truth"),
+        Line2D([0], [0], color="red", lw=2, label="Prediction"),
+    ], loc="upper right")
 
     bev_axis.scatter(
         -lidar[:, 1], lidar[:, 0], s=0.3, c="gray", alpha=0.35,
@@ -111,7 +116,12 @@ def render(info, result, output_path, args, class_names):
     bev_axis.set_ylabel("Ego X: forward (+) [m]")
     bev_axis.set_title("Front BEV: GT green, prediction red")
     bev_axis.grid(True, linewidth=0.4, alpha=0.4)
-    bev_axis.legend(loc="upper right")
+    bev_axis.legend(handles=[
+        Line2D([0], [0], marker=".", color="gray", lw=0, label="LiDAR"),
+        Line2D([0], [0], color="lime", lw=2, label="Ground truth"),
+        Line2D([0], [0], color="red", lw=2, label="Prediction"),
+        Line2D([0], [0], marker="^", color="blue", lw=0, label="Ego"),
+    ], loc="upper right")
 
     figure.suptitle(
         f"sample={info['token']} | GT={len(gt_boxes)} "
