@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
+from tqdm import tqdm
 
 
 DEFAULT_K = np.array(
@@ -691,7 +692,12 @@ def main() -> None:
             "a matching --gt-dir, or use --all-frames-as-keyframes.")
     infos: List[Dict] = []
 
-    for index in keyframe_ids:
+    for index in tqdm(
+        keyframe_ids,
+        desc="Converting keyframes",
+        unit="frame",
+        dynamic_ncols=True,
+    ):
         rec = records[index]
         current_ego2global = rec.ego2global
         ego2global_translation = current_ego2global[:3, 3].astype(np.float32)
