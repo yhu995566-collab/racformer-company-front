@@ -35,8 +35,15 @@ def parse_args():
     return parser.parse_args()
 
 
-def load_points(path, dim):
+def resolve_path(path, data_root=None):
     path = Path(path)
+    if not path.is_absolute() and data_root is not None:
+        path = Path(data_root) / path
+    return path
+
+
+def load_points(path, dim, data_root=None):
+    path = resolve_path(path, data_root)
     if path.suffix.lower() == ".npy":
         points = np.load(path)
     else:
@@ -151,15 +158,16 @@ def select_indices(length, requested, count):
 
 
 def render_sample(info, output_path, camera_key, radar_key,
-                  max_lidar_points, max_radar_points):
+                  max_lidar_points, max_radar_points, data_root=None):
     cam = info["cams"][camera_key]
     radar_info = info["rads"][radar_key]
-    image = np.asarray(Image.open(cam["data_path"]).convert("RGB"))
+    image = np.asarray(
+        Image.open(resolve_path(cam["data_path"], data_root)).convert("RGB"))
 
-    lidar = load_points(info["lidar_path"], 5)
+    lidar = load_points(info["lidar_path"], 5, data_root)
     if not info.get("lidar_in_ego", True):
         lidar = transform_points(lidar, info["lidar2ego"])
-    radar = load_points(radar_info["data_path"], 7)
+    radar = load_points(radar_info["data_path"], 7, data_root)
     if not radar_info.get("radar_in_ego", True):
         radar = transform_points(radar, radar_info["radar2ego"])
 
@@ -228,7 +236,8 @@ def main():
         output_path = args.output_dir / f"{index:04d}_{info['token']}.png"
         render_sample(
             info, output_path, args.camera_key, args.radar_key,
-            args.max_lidar_points, args.max_radar_points)
+            args.max_lidar_points, args.max_radar_points,
+            args.ann_file.resolve().parent)
         print(f"[{index + 1}/{len(infos)}] {output_path}")
 
     print(f"Wrote {len(indices)} visualizations to {args.output_dir.resolve()}")

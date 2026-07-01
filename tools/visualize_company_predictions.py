@@ -21,6 +21,7 @@ from visualize_company_alignment import (
     lidar2img,
     load_points,
     project,
+    resolve_path,
     select_indices,
     subsample,
     transform_points,
@@ -61,12 +62,13 @@ def prediction_fields(result, score_threshold):
     return boxes[keep], scores[keep], labels[keep]
 
 
-def render(info, result, output_path, args, class_names):
+def render(info, result, output_path, args, class_names, data_root):
     cam = info["cams"][args.camera_key]
-    image = np.asarray(Image.open(cam["data_path"]).convert("RGB"))
+    image = np.asarray(
+        Image.open(resolve_path(cam["data_path"], data_root)).convert("RGB"))
     projection = lidar2img(cam)
 
-    lidar = load_points(info["lidar_path"], 5)
+    lidar = load_points(info["lidar_path"], 5, data_root)
     if not info.get("lidar_in_ego", True):
         lidar = transform_points(lidar, info["lidar2ego"])
     lidar = subsample(filter_roi(lidar), args.max_lidar_points)
@@ -147,7 +149,9 @@ def main():
     args.output_dir.mkdir(parents=True, exist_ok=True)
     for index in indices:
         output_path = args.output_dir / f"{index:04d}_{infos[index]['token']}.png"
-        render(infos[index], predictions[index], output_path, args, class_names)
+        render(
+            infos[index], predictions[index], output_path, args, class_names,
+            args.ann_file.resolve().parent)
         print(f"[{index + 1}/{len(infos)}] {output_path}")
     print(f"Wrote {len(indices)} visualizations to {args.output_dir.resolve()}")
 

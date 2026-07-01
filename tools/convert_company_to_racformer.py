@@ -530,6 +530,15 @@ def maybe_copy_image(src: Path, out_root: Path, copy_images: bool) -> Path:
     return dst
 
 
+def metadata_path(path: Path, out_root: Path) -> str:
+    """Use paths relative to the processed root when possible."""
+    path = path.resolve()
+    try:
+        return str(path.relative_to(out_root.resolve()))
+    except ValueError:
+        return str(path)
+
+
 def transform_info_from_lidar_to_camera(t_lidar_to_camera: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     t_camera_to_lidar = np.linalg.inv(t_lidar_to_camera)
     return t_camera_to_lidar[:3, :3].astype(np.float32), t_camera_to_lidar[:3, 3].astype(np.float32)
@@ -743,7 +752,7 @@ def main() -> None:
         image_path = maybe_copy_image(rec.image_path, args.out_root, args.copy_images)
 
         cam_entry = make_cam_entry(
-            image_path,
+            Path(metadata_path(image_path, args.out_root)),
             rec.timestamp_us,
             k,
             t_ego_to_camera,
@@ -755,7 +764,7 @@ def main() -> None:
         cams = {key: dict(cam_entry) for key in cam_keys}
         rads = {
             key: {
-                "data_path": str(radar_path),
+                "data_path": metadata_path(radar_path, args.out_root),
                 "timestamp": int(rec.timestamp_us),
                 "radar_in_ego": radar_in_ego,
                 "radar2ego": t_radar_to_ego.astype(np.float32),
@@ -774,7 +783,7 @@ def main() -> None:
                 prev_ego_to_camera @ current_ego_to_prev_ego)
             prev_image = maybe_copy_image(prev.image_path, args.out_root, args.copy_images)
             prev_cam_entry = make_cam_entry(
-                prev_image,
+                Path(metadata_path(prev_image, args.out_root)),
                 prev.timestamp_us,
                 k,
                 current_ego_to_prev_camera,
@@ -798,7 +807,8 @@ def main() -> None:
                 raw_radar_to_current_ego, np.eye(4), atol=1e-6)
             for key in radar_keys:
                 sweep[key] = {
-                    "data_path": str(prev_radar_path),
+                    "data_path": metadata_path(
+                        prev_radar_path, args.out_root),
                     "timestamp": int(prev.timestamp_us),
                     "radar_in_ego": sweep_radar_in_current_ego,
                     "radar2ego": raw_radar_to_current_ego.astype(np.float32),
@@ -811,11 +821,11 @@ def main() -> None:
             {
                 "token": rec.sample_id,
                 "timestamp": int(rec.timestamp_us),
-                "lidar_path": str(lidar_path),
+                "lidar_path": metadata_path(lidar_path, args.out_root),
                 "lidar_in_ego": np.allclose(
                     t_lidar_to_ego, np.eye(4), atol=1e-6),
                 "lidar2ego": t_lidar_to_ego.astype(np.float32),
-                "radar_path": str(radar_path),
+                "radar_path": metadata_path(radar_path, args.out_root),
                 "ego2global_translation": ego2global_translation,
                 "ego2global_rotation": [1.0, 0.0, 0.0, 0.0],
                 "ego2global": current_ego2global.astype(np.float32),
