@@ -463,8 +463,8 @@ class BEVSampling(BaseModule):
         positional_encoding=dict(
         type='LearnedPositionalEncoding',
         num_feats=128,
-        row_num_embed=spatial_shapes[1],
-        col_num_embed=spatial_shapes[0])
+        row_num_embed=spatial_shapes[0],
+        col_num_embed=spatial_shapes[1])
         
         self.positional_encoding = build_positional_encoding(
             positional_encoding)      
