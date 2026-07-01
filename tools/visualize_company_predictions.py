@@ -48,7 +48,12 @@ def parse_args():
 
 def prediction_fields(result, score_threshold):
     result = result.get("pts_bbox", result)
-    boxes = result["boxes_3d"].tensor.detach().cpu().numpy()
+    boxes_3d = result["boxes_3d"]
+    boxes = np.concatenate([
+        boxes_3d.gravity_center.detach().cpu().numpy(),
+        boxes_3d.dims.detach().cpu().numpy(),
+        boxes_3d.yaw.detach().cpu().numpy()[:, None],
+    ], axis=1)
     scores = result["scores_3d"].detach().cpu().numpy()
     labels = result["labels_3d"].detach().cpu().numpy()
     keep = scores >= score_threshold
