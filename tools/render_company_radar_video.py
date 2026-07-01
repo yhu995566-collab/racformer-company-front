@@ -8,8 +8,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from convert_company_to_racformer import read_ply_vertices
-from visualize_company_alignment import load_points, resolve_path, transform_points
+from visualize_company_alignment import load_points, transform_points
 from visualize_company_predictions import prediction_fields
 
 
@@ -17,54 +16,27 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Render company radar BEV video")
     parser.add_argument("--ann-file", required=True, type=Path)
     parser.add_argument("--predictions", required=True, type=Path)
-    parser.add_argument("--raw-radar-dir", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--radar-key", default="RADAR_FRONT")
     parser.add_argument("--score-threshold", type=float, default=0.3)
-    parser.add_argument("--forward-range", type=float, default=300.0)
-    parser.add_argument("--lateral-range", type=float, default=60.0)
+    parser.add_argument("--forward-range", type=float, default=100.0)
+    parser.add_argument("--lateral-range", type=float, default=15.0)
     parser.add_argument("--fps", type=float, default=2.0)
     parser.add_argument("--width", type=int, default=720)
     parser.add_argument("--height", type=int, default=1280)
     parser.add_argument("--margin", type=int, default=35)
     parser.add_argument("--max-lidar-points", type=int, default=50000)
     parser.add_argument("--max-radar-points", type=int, default=15000)
-    parser.add_argument("--static-radius", type=int, default=2)
-    parser.add_argument("--dynamic-radius", type=int, default=3)
+    parser.add_argument("--radar-radius", type=int, default=1)
+    parser.add_argument("--highlight-radius", type=int, default=2)
     return parser.parse_args()
 
 
-def find_raw_radar(raw_dir, token):
-    for suffix in (".ply", ".pcd"):
-        path = raw_dir / f"{token}{suffix}"
-        if path.exists():
-            return path
-    matches = sorted(raw_dir.glob(f"{token}.*"))
-    if not matches:
-        raise FileNotFoundError(f"No raw radar file for token {token}")
-    return matches[0]
-
-
-def load_raw_radar(path):
-    if path.suffix.lower() != ".ply":
-        raise ValueError(
-            f"Dynamic labels currently require PLY radar input, received {path}")
-    points, names = read_ply_vertices(path)
-    columns = {name: index for index, name in enumerate(names)}
-    missing = [name for name in ("x", "y", "z", "label") if name not in columns]
-    if missing:
-        raise ValueError(f"{path} is missing radar fields {missing}")
-    xyz = points[:, [columns["x"], columns["y"], columns["z"]]].astype(
-        np.float32)
-    labels = points[:, columns["label"]].astype(np.int32)
-    return xyz, labels
-
-
-def subsample_pair(points, labels, maximum):
+def subsample(points, maximum):
     if len(points) <= maximum:
-        return points, labels
+        return points
     indices = np.linspace(0, len(points) - 1, maximum, dtype=np.int64)
-    return points[indices], labels[indices]
+    return points[indices]
 
 
 class BevCanvas:
@@ -149,6 +121,22 @@ def draw_predictions(frame, canvas, boxes, scores):
             cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1, cv2.LINE_AA)
 
 
+def points_inside_predictions(points, boxes):
+    """Return a BEV mask for radar points enclosed by any predicted box."""
+    inside = np.zeros(len(points), dtype=bool)
+    for box in boxes:
+        x, y, _, dx, dy, _, yaw = box[:7]
+        delta_x = points[:, 0] - x
+        delta_y = points[:, 1] - y
+        cosine, sine = np.cos(yaw), np.sin(yaw)
+        local_x = cosine * delta_x + sine * delta_y
+        local_y = -sine * delta_x + cosine * delta_y
+        inside |= (
+            (np.abs(local_x) <= dx * 0.5) &
+            (np.abs(local_y) <= dy * 0.5))
+    return inside
+
+
 def main():
     args = parse_args()
     with args.ann_file.open("rb") as handle:
@@ -181,26 +169,22 @@ def main():
                 lidar = lidar[indices]
 
             radar_info = info["rads"][args.radar_key]
-            radar_xyz, radar_labels = load_raw_radar(
-                find_raw_radar(args.raw_radar_dir, info["token"]))
+            radar = load_points(radar_info["data_path"], 7, data_root)
             if not radar_info.get("radar_in_ego", True):
-                radar_with_padding = np.column_stack([
-                    radar_xyz, np.zeros((len(radar_xyz), 4), dtype=np.float32)])
-                radar_xyz = transform_points(
-                    radar_with_padding, radar_info["radar2ego"])[:, :3]
-            radar_xyz, radar_labels = subsample_pair(
-                radar_xyz, radar_labels, args.max_radar_points)
+                radar = transform_points(radar, radar_info["radar2ego"])
+            radar_xyz = subsample(radar[:, :3], args.max_radar_points)
 
             boxes, scores, _ = prediction_fields(
                 prediction, args.score_threshold)
+            highlighted = points_inside_predictions(radar_xyz, boxes)
             frame = canvas.blank()
             draw_lidar(frame, canvas, lidar[:, :3])
             draw_points(
-                frame, canvas, radar_xyz[radar_labels == 0],
-                (255, 255, 255), args.static_radius)
+                frame, canvas, radar_xyz[~highlighted],
+                (255, 255, 255), args.radar_radius)
             draw_points(
-                frame, canvas, radar_xyz[radar_labels != 0],
-                (0, 255, 0), args.dynamic_radius)
+                frame, canvas, radar_xyz[highlighted],
+                (0, 255, 0), args.highlight_radius)
             draw_predictions(frame, canvas, boxes, scores)
             cv2.putText(
                 frame, f"frame {frame_id + 1}/{len(infos)}  token {info['token']}",
