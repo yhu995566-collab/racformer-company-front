@@ -145,9 +145,20 @@ def main():
             if not radar_info.get("radar_in_ego", True):
                 radar = transform_points(radar, radar_info["radar2ego"])
             radar_xyz = subsample(radar[:, :3], args.max_radar_points)
+            radar_mask = (
+                (radar_xyz[:, 0] >= 0.0) &
+                (radar_xyz[:, 0] <= args.forward_range) &
+                (np.abs(radar_xyz[:, 1]) <= args.lateral_range))
+            radar_xyz = radar_xyz[radar_mask]
 
             boxes, scores, _ = prediction_fields(
                 prediction, args.score_threshold)
+            box_mask = (
+                (boxes[:, 0] >= 0.0) &
+                (boxes[:, 0] <= args.forward_range) &
+                (np.abs(boxes[:, 1]) <= args.lateral_range))
+            boxes = boxes[box_mask]
+            scores = scores[box_mask]
             highlighted = points_inside_predictions(radar_xyz, boxes)
 
             left = camera_panel(
