@@ -240,6 +240,21 @@ class CompanyFrontDataset(Custom3DDataset):
             num_gt=num_gt, num_predictions=len(detections),
             threshold_tp=threshold_tp, threshold_fp=threshold_fp)
 
+    @staticmethod
+    def _filter_distance(items, min_distance, max_distance,
+                         with_scores):
+        filtered = []
+        for item in items:
+            boxes = item[0]
+            centers = boxes.gravity_center[:, 0].detach().cpu().numpy()
+            mask = (centers >= min_distance) & (centers < max_distance)
+            box_mask = torch.from_numpy(mask).to(boxes.tensor.device)
+            if with_scores:
+                filtered.append((boxes[box_mask], item[1][mask], item[2][mask]))
+            else:
+                filtered.append((boxes[box_mask], item[1][mask]))
+        return filtered
+
     def evaluate(self, results, metric=None, logger=None,
                  bev_iou_threshold=0.5, iou_3d_threshold=0.5,
                  score_threshold=0.1, **kwargs):
@@ -287,4 +302,40 @@ class CompanyFrontDataset(Custom3DDataset):
         metrics[f'company/overall_recall@{score_threshold:g}'] = \
             total_tp / max(float(total_gt), 1.0)
         metrics['company/total_gt'] = total_gt
+
+        for min_distance, max_distance in ((0, 50), (50, 100), (100, 200)):
+            range_predictions = self._filter_distance(
+                predictions, min_distance, max_distance, with_scores=True)
+            range_ground_truth = self._filter_distance(
+                ground_truth, min_distance, max_distance, with_scores=False)
+            range_bev_aps = []
+            range_3d_aps = []
+            range_tp = 0.0
+            range_fp = 0.0
+            range_gt = 0
+            for class_id, _ in enumerate(self.CLASSES):
+                bev = self._evaluate_class(
+                    range_predictions, range_ground_truth, class_id,
+                    self._bev_iou, bev_iou_threshold, score_threshold)
+                iou_3d = self._evaluate_class(
+                    range_predictions, range_ground_truth, class_id,
+                    self._iou_3d, iou_3d_threshold, score_threshold)
+                if bev['num_gt'] == 0:
+                    continue
+                range_bev_aps.append(bev['ap'])
+                range_3d_aps.append(iou_3d['ap'])
+                range_tp += bev['threshold_tp']
+                range_fp += bev['threshold_fp']
+                range_gt += bev['num_gt']
+
+            prefix = f'company/range_{min_distance}_{max_distance}m'
+            metrics[f'{prefix}_BEV_mAP@{bev_iou_threshold:g}'] = \
+                float(np.mean(range_bev_aps)) if range_bev_aps else 0.0
+            metrics[f'{prefix}_3D_mAP@{iou_3d_threshold:g}'] = \
+                float(np.mean(range_3d_aps)) if range_3d_aps else 0.0
+            metrics[f'{prefix}_precision@{score_threshold:g}'] = \
+                range_tp / max(range_tp + range_fp, 1.0)
+            metrics[f'{prefix}_recall@{score_threshold:g}'] = \
+                range_tp / max(float(range_gt), 1.0)
+            metrics[f'{prefix}_num_gt'] = range_gt
         return metrics
