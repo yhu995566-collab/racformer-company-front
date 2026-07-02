@@ -44,8 +44,8 @@ def parse_args():
     parser.add_argument("--camera-key", default="CAM_FRONT")
     parser.add_argument("--radar-key", default="RADAR_FRONT")
     parser.add_argument("--max-radar-points", type=int, default=15000)
-    parser.add_argument("--bev-forward-range", type=float, default=300.0)
-    parser.add_argument("--bev-lateral-range", type=float, default=60.0)
+    parser.add_argument("--bev-forward-range", type=float, default=200.0)
+    parser.add_argument("--bev-lateral-range", type=float, default=20.0)
     return parser.parse_args()
 
 
