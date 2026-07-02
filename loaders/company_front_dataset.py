@@ -20,7 +20,7 @@ class CompanyFrontDataset(Custom3DDataset):
 
     def __init__(self, camera_key='CAM_FRONT', radar_key='RADAR_FRONT',
                  num_sweeps=7,
-                 point_cloud_range=(0, -15, -3, 100, 15, 3), **kwargs):
+                 point_cloud_range=(0, -20, -3, 200, 20, 3), **kwargs):
         self.camera_key = camera_key
         self.radar_key = radar_key
         self.num_sweeps = num_sweeps

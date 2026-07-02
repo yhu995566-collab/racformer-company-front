@@ -21,7 +21,7 @@ class_names = [
 
 # If point cloud range is changed, the models should also change their point
 # cloud range accordingly
-point_cloud_range = [0.0, -15.0, -3.0, 100.0, 15.0, 3.0]
+point_cloud_range = [0.0, -20.0, -3.0, 200.0, 20.0, 3.0]
 voxel_size = [0.5, 0.5, 6.0]
 bev_w = int((point_cloud_range[3] - point_cloud_range[0]) / voxel_size[0])
 bev_h = int((point_cloud_range[4] - point_cloud_range[1]) / voxel_size[1])
@@ -57,10 +57,10 @@ ida_aug_conf = {
 
 # Model
 grid_config = {
-    'x': [0.0, 100.0, 0.5],
-    'y': [-15.0, 15.0, 0.5],
+    'x': [0.0, 200.0, 0.5],
+    'y': [-20.0, 20.0, 0.5],
     'z': [-3.0, 3.0, 6.0],
-    'depth': [1.0, 105.0, 96.0],
+    'depth': [1.0, 205.0, 96.0],
     'rcs': [-64, 64, 64]
 }
 
