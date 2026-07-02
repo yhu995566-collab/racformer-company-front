@@ -53,7 +53,8 @@ class LoadFrontCameraSweeps:
 
 @PIPELINES.register_module()
 class LoadCompanyLidarPoints:
-    def __init__(self, load_dim=5, use_dim=5, roi=(0, -12, -3, 50, 12, 3)):
+    def __init__(self, load_dim=5, use_dim=5,
+                 roi=(0, -15, -3, 100, 15, 3)):
         self.load_dim = load_dim
         self.use_dim = list(range(use_dim)) if isinstance(use_dim, int) else use_dim
         self.roi = roi
@@ -78,7 +79,7 @@ class LoadCompanyRadarSweeps:
     """Normalize company radar to ego, then apply the front ROI."""
 
     def __init__(self, sweeps_num=7, load_dim=7,
-                 roi=(0, -12, -3, 50, 12, 3)):
+                 roi=(0, -15, -3, 100, 15, 3)):
         self.sweeps_num = sweeps_num
         self.load_dim = load_dim
         self.roi = roi
@@ -123,7 +124,7 @@ class LoadCompanyRadarSweeps:
 class FrontViewFilter:
     """Apply one front ROI consistently to LiDAR, radar, and GT boxes."""
 
-    def __init__(self, roi=(0, -12, -3, 50, 12, 3)):
+    def __init__(self, roi=(0, -15, -3, 100, 15, 3)):
         self.roi = roi
 
     def __call__(self, results):

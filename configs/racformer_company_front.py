@@ -21,8 +21,10 @@ class_names = [
 
 # If point cloud range is changed, the models should also change their point
 # cloud range accordingly
-point_cloud_range = [0.0, -12.0, -3.0, 50.0, 12.0, 3.0]
+point_cloud_range = [0.0, -15.0, -3.0, 100.0, 15.0, 3.0]
 voxel_size = [0.5, 0.5, 6.0]
+bev_w = int((point_cloud_range[3] - point_cloud_range[0]) / voxel_size[0])
+bev_h = int((point_cloud_range[4] - point_cloud_range[1]) / voxel_size[1])
 
 # arch config
 embed_dims = 256
@@ -55,10 +57,10 @@ ida_aug_conf = {
 
 # Model
 grid_config = {
-    'x': [0.0, 50.0, 0.5],
-    'y': [-12.0, 12.0, 0.5],
+    'x': [0.0, 100.0, 0.5],
+    'y': [-15.0, 15.0, 0.5],
     'z': [-3.0, 3.0, 6.0],
-    'depth': [1.0, 55.0, 96.0],
+    'depth': [1.0, 105.0, 96.0],
     'rcs': [-64, 64, 64]
 }
 
@@ -139,7 +141,8 @@ model = dict(
         legacy=False),
 
     radar_middle_encoder=dict(
-        type='PointPillarsScatter', in_channels=64, output_shape=(48, 100)),
+        type='PointPillarsScatter', in_channels=64,
+        output_shape=(bev_h, bev_w)),
 
     pts_bbox_head=dict(
         type='RaCFormer_head',
@@ -168,7 +171,7 @@ model = dict(
             num_classes=10,
             code_size=10,
             pc_range=point_cloud_range,
-            spatial_shapes=(48, 100),
+            spatial_shapes=(bev_h, bev_w),
             d_region_list=d_region_list),
         bbox_coder=dict(
             type='NMSFreeCoder',
@@ -192,7 +195,7 @@ model = dict(
         loss_bbox=dict(type='L1Loss', loss_weight=0.25),
         loss_iou=dict(type='GIoULoss', loss_weight=0.0)),
     train_cfg=dict(pts=dict(
-        grid_size=[100, 48, 1],
+        grid_size=[bev_w, bev_h, 1],
         voxel_size=voxel_size,
         point_cloud_range=point_cloud_range,
         out_size_factor=1,
@@ -264,6 +267,7 @@ data = dict(
         classes=class_names,
         camera_key='CAM_FRONT',
         radar_key='RADAR_FRONT',
+        point_cloud_range=point_cloud_range,
         num_sweeps=num_frames - 1,
         test_mode=False,
         box_type_3d='LiDAR'),
@@ -275,6 +279,7 @@ data = dict(
         classes=class_names,
         camera_key='CAM_FRONT',
         radar_key='RADAR_FRONT',
+        point_cloud_range=point_cloud_range,
         num_sweeps=num_frames - 1,
         test_mode=True,
         box_type_3d='LiDAR'),
@@ -286,6 +291,7 @@ data = dict(
         classes=class_names,
         camera_key='CAM_FRONT',
         radar_key='RADAR_FRONT',
+        point_cloud_range=point_cloud_range,
         num_sweeps=num_frames - 1,
         test_mode=True,
         box_type_3d='LiDAR')

@@ -19,10 +19,13 @@ class CompanyFrontDataset(Custom3DDataset):
         'bicycle', 'motorcycle', 'pedestrian', 'traffic_cone', 'barrier')
 
     def __init__(self, camera_key='CAM_FRONT', radar_key='RADAR_FRONT',
-                 num_sweeps=7, **kwargs):
+                 num_sweeps=7,
+                 point_cloud_range=(0, -15, -3, 100, 15, 3), **kwargs):
         self.camera_key = camera_key
         self.radar_key = radar_key
         self.num_sweeps = num_sweeps
+        self.point_cloud_range = np.asarray(
+            point_cloud_range, dtype=np.float32)
         super().__init__(**kwargs)
 
     def load_annotations(self, ann_file):
@@ -171,7 +174,7 @@ class CompanyFrontDataset(Custom3DDataset):
         if len(boxes) == 0:
             return boxes, labels
         centers = boxes.gravity_center
-        roi = np.asarray([0.0, -12.0, -3.0, 50.0, 12.0, 3.0])
+        roi = self.point_cloud_range
         mask = (
             (centers[:, 0] >= roi[0]) & (centers[:, 0] <= roi[3]) &
             (centers[:, 1] >= roi[1]) & (centers[:, 1] <= roi[4]) &
