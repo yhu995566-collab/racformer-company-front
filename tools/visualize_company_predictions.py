@@ -10,8 +10,10 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
 from PIL import Image
 from matplotlib.lines import Line2D
+from mmcv.ops import nms_rotated
 
 from visualize_company_alignment import (
     draw_bev_boxes,
@@ -39,6 +41,7 @@ def parse_args():
     parser.add_argument("--predictions", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--score-threshold", type=float, default=0.3)
+    parser.add_argument("--nms-iou-threshold", type=float, default=0.2)
     parser.add_argument("--indices", nargs="*", type=int)
     parser.add_argument("--num-samples", type=int, default=12)
     parser.add_argument("--camera-key", default="CAM_FRONT")
@@ -49,7 +52,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def prediction_fields(result, score_threshold):
+def prediction_fields(result, score_threshold, nms_iou_threshold=0.2):
     result = result.get("pts_bbox", result)
     boxes_3d = result["boxes_3d"]
     boxes = np.concatenate([
@@ -60,7 +63,26 @@ def prediction_fields(result, score_threshold):
     scores = result["scores_3d"].detach().cpu().numpy()
     labels = result["labels_3d"].detach().cpu().numpy()
     keep = scores >= score_threshold
-    return boxes[keep], scores[keep], labels[keep]
+    boxes, scores, labels = boxes[keep], scores[keep], labels[keep]
+    if len(boxes) == 0 or nms_iou_threshold <= 0:
+        return boxes, scores, labels
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    kept_indices = []
+    for class_id in np.unique(labels):
+        class_indices = np.flatnonzero(labels == class_id)
+        bev_boxes = torch.as_tensor(
+            boxes[class_indices][:, [0, 1, 3, 4, 6]],
+            dtype=torch.float32, device=device)
+        class_scores = torch.as_tensor(
+            scores[class_indices], dtype=torch.float32, device=device)
+        _, class_keep = nms_rotated(
+            bev_boxes, class_scores, nms_iou_threshold)
+        kept_indices.extend(class_indices[class_keep.detach().cpu().numpy()])
+    kept_indices = np.asarray(
+        sorted(kept_indices, key=lambda index: scores[index], reverse=True),
+        dtype=np.int64)
+    return boxes[kept_indices], scores[kept_indices], labels[kept_indices]
 
 
 def render(info, result, output_path, args, class_names, data_root):
@@ -82,7 +104,7 @@ def render(info, result, output_path, args, class_names, data_root):
     gt_boxes = np.asarray(info.get("gt_boxes", []), dtype=np.float32).reshape(-1, 7)
     gt_names = np.asarray(info.get("gt_names", []))
     pred_boxes, pred_scores, pred_labels = prediction_fields(
-        result, args.score_threshold)
+        result, args.score_threshold, args.nms_iou_threshold)
     pred_names = np.asarray([
         f"{class_names[label] if label < len(class_names) else label} {score:.2f}"
         for label, score in zip(pred_labels, pred_scores)

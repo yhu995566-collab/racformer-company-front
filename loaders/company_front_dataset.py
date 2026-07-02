@@ -3,7 +3,7 @@ import os.path as osp
 import mmcv
 import numpy as np
 import torch
-from mmcv.ops import box_iou_rotated
+from mmcv.ops import box_iou_rotated, nms_rotated
 from mmdet.datasets import DATASETS
 from mmdet.core.evaluation.mean_ap import average_precision
 from mmdet3d.core.bbox import LiDARInstance3DBoxes
@@ -140,12 +140,34 @@ class CompanyFrontDataset(Custom3DDataset):
             gt_names_3d=gt_names)
 
     @staticmethod
-    def _result_fields(result):
+    def _result_fields(result, nms_iou_threshold):
         result = result.get('pts_bbox', result)
-        return (
-            result['boxes_3d'],
-            result['scores_3d'].detach().cpu().numpy(),
-            result['labels_3d'].detach().cpu().numpy())
+        boxes = result['boxes_3d']
+        scores = result['scores_3d'].detach().cpu().numpy()
+        labels = result['labels_3d'].detach().cpu().numpy()
+        if len(boxes) == 0 or nms_iou_threshold <= 0:
+            return boxes, scores, labels
+
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        kept_indices = []
+        for class_id in np.unique(labels):
+            class_indices = np.flatnonzero(labels == class_id)
+            class_box_indices = torch.as_tensor(
+                class_indices, dtype=torch.long, device=boxes.tensor.device)
+            bev_boxes = boxes.tensor[class_box_indices][
+                :, [0, 1, 3, 4, 6]].to(device=device)
+            class_scores = torch.as_tensor(
+                scores[class_indices], dtype=torch.float32, device=device)
+            _, class_keep = nms_rotated(
+                bev_boxes, class_scores, nms_iou_threshold)
+            kept_indices.extend(
+                class_indices[class_keep.detach().cpu().numpy()])
+        kept_indices = np.asarray(
+            sorted(kept_indices, key=lambda index: scores[index], reverse=True),
+            dtype=np.int64)
+        box_indices = torch.as_tensor(
+            kept_indices, dtype=torch.long, device=boxes.tensor.device)
+        return boxes[box_indices], scores[kept_indices], labels[kept_indices]
 
     @staticmethod
     def _bev_iou(boxes1, boxes2):
@@ -257,13 +279,15 @@ class CompanyFrontDataset(Custom3DDataset):
 
     def evaluate(self, results, metric=None, logger=None,
                  bev_iou_threshold=0.5, iou_3d_threshold=0.5,
-                 score_threshold=0.1, **kwargs):
+                 score_threshold=0.1, nms_iou_threshold=0.2, **kwargs):
         """Evaluate front-view detections with class-wise BEV and 3D AP."""
         if len(results) != len(self):
             raise ValueError(
                 f'Expected {len(self)} predictions, received {len(results)}')
 
-        predictions = [self._result_fields(result) for result in results]
+        predictions = [
+            self._result_fields(result, nms_iou_threshold)
+            for result in results]
         ground_truth = [self._filtered_gt(index) for index in range(len(self))]
         metrics = {}
         bev_aps = []

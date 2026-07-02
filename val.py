@@ -39,6 +39,7 @@ def main():
     parser.add_argument('--split', choices=('val', 'test'), default='val')
     parser.add_argument('--out', help='Optional PKL path for raw predictions')
     parser.add_argument('--score-threshold', type=float, default=0.1)
+    parser.add_argument('--nms-iou-threshold', type=float, default=0.2)
     parser.add_argument('--bev-iou-threshold', type=float, default=0.5)
     parser.add_argument('--iou-3d-threshold', type=float, default=0.5)
     parser.add_argument('--skip-eval', action='store_true')
@@ -134,6 +135,7 @@ def main():
             if val_dataset.__class__.__name__ == 'CompanyFrontDataset':
                 eval_kwargs = dict(
                     score_threshold=args.score_threshold,
+                    nms_iou_threshold=args.nms_iou_threshold,
                     bev_iou_threshold=args.bev_iou_threshold,
                     iou_3d_threshold=args.iou_3d_threshold)
             evaluate(val_dataset, results, **eval_kwargs)

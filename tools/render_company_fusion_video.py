@@ -38,6 +38,7 @@ def parse_args():
     parser.add_argument("--camera-key", default="CAM_FRONT")
     parser.add_argument("--radar-key", default="RADAR_FRONT")
     parser.add_argument("--score-threshold", type=float, default=0.3)
+    parser.add_argument("--nms-iou-threshold", type=float, default=0.2)
     parser.add_argument("--forward-range", type=float, default=100.0)
     parser.add_argument("--lateral-range", type=float, default=15.0)
     parser.add_argument("--fps", type=float, default=2.0)
@@ -152,7 +153,7 @@ def main():
             radar_xyz = radar_xyz[radar_mask]
 
             boxes, scores, _ = prediction_fields(
-                prediction, args.score_threshold)
+                prediction, args.score_threshold, args.nms_iou_threshold)
             box_mask = (
                 (boxes[:, 0] >= 0.0) &
                 (boxes[:, 0] <= args.forward_range) &

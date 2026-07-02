@@ -19,6 +19,7 @@ def parse_args():
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--radar-key", default="RADAR_FRONT")
     parser.add_argument("--score-threshold", type=float, default=0.3)
+    parser.add_argument("--nms-iou-threshold", type=float, default=0.2)
     parser.add_argument("--forward-range", type=float, default=100.0)
     parser.add_argument("--lateral-range", type=float, default=15.0)
     parser.add_argument("--fps", type=float, default=2.0)
@@ -175,7 +176,7 @@ def main():
             radar_xyz = subsample(radar[:, :3], args.max_radar_points)
 
             boxes, scores, _ = prediction_fields(
-                prediction, args.score_threshold)
+                prediction, args.score_threshold, args.nms_iou_threshold)
             highlighted = points_inside_predictions(radar_xyz, boxes)
             frame = canvas.blank()
             draw_lidar(frame, canvas, lidar[:, :3])
