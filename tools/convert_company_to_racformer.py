@@ -489,13 +489,18 @@ def convert_radar_points(
     Final columns are:
         x, y, z, rcs, vx, vy, time_lag
 
-    Raw `v` is treated as radial velocity. Its sign convention still needs to
-    be checked against the radar documentation; the geometric decomposition
-    into the native radar x/y axes is deterministic.
+    New company files provide relative radial speed as `rsp_velocity` and
+    signed host longitudinal speed as `ego_speed` (forward positive). For the
+    native +y-forward radar frame, ego-motion compensated radial velocity is:
+
+        rsp_velocity + ego_speed * y / hypot(x, y)
+
+    Legacy files containing only `v` remain supported without compensation.
     """
     if dim < 7:
         raise ValueError("Radar output dimension must be at least 7")
-    fields = columns_by_name(points, names, ("x", "y", "z", "v", "rcs"))
+    fields = columns_by_name(points, names, ("x", "y", "z", "rcs"))
+    field_indices = {name: index for index, name in enumerate(names)}
     out = np.zeros((points.shape[0], dim), dtype=np.float32)
     out[:, 0] = fields["x"]
     out[:, 1] = fields["y"]
@@ -503,8 +508,22 @@ def convert_radar_points(
     out[:, 3] = fields["rcs"]
     distance_xy = np.hypot(fields["x"], fields["y"])
     valid = distance_xy > 1e-6
-    out[valid, 4] = fields["v"][valid] * fields["x"][valid] / distance_xy[valid]
-    out[valid, 5] = fields["v"][valid] * fields["y"][valid] / distance_xy[valid]
+    if "rsp_velocity" in field_indices:
+        radial_velocity = points[:, field_indices["rsp_velocity"]].copy()
+        if "ego_speed" in field_indices:
+            ego_speed = points[:, field_indices["ego_speed"]]
+            radial_velocity[valid] += (
+                ego_speed[valid] * fields["y"][valid] / distance_xy[valid])
+    elif "v" in field_indices:
+        radial_velocity = points[:, field_indices["v"]].copy()
+    else:
+        raise ValueError(
+            "Radar PLY requires rsp_velocity or legacy v velocity field")
+
+    out[valid, 4] = (
+        radial_velocity[valid] * fields["x"][valid] / distance_xy[valid])
+    out[valid, 5] = (
+        radial_velocity[valid] * fields["y"][valid] / distance_xy[valid])
     # Column 6 is filled with the actual time lag by LoadCompanyRadarSweeps.
     return out
 
