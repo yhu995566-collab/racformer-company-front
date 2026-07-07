@@ -126,10 +126,16 @@ def main():
         results = single_gpu_test(model, val_loader)
 
     if local_rank == 0:
-        if args.out:
-            mmcv.mkdir_or_exist(osp.dirname(osp.abspath(args.out)))
-            mmcv.dump(results, args.out)
-            logging.info('Predictions saved to %s', args.out)
+        prediction_out = args.out
+        if prediction_out is None and cfgs.get('evaluation_output_dir', None):
+            weight_name = osp.splitext(osp.basename(args.weights))[0]
+            prediction_out = osp.join(
+                cfgs.evaluation_output_dir,
+                '{}_{}.pkl'.format(weight_name, args.split))
+        if prediction_out:
+            mmcv.mkdir_or_exist(osp.dirname(osp.abspath(prediction_out)))
+            mmcv.dump(results, prediction_out)
+            logging.info('Predictions saved to %s', prediction_out)
         if not args.skip_eval:
             eval_kwargs = {}
             if val_dataset.__class__.__name__ == 'CompanyFrontDataset':
