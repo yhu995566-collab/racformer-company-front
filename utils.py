@@ -5,6 +5,7 @@ import torch
 import shutil
 import logging
 import datetime
+from numbers import Number
 from mmcv.runner.hooks import HOOKS
 from mmcv.runner.hooks.logger import LoggerHook, TextLoggerHook
 from mmcv.runner.dist_utils import master_only
@@ -122,14 +123,18 @@ class MyTextLoggerHook(TextLoggerHook):
     def after_train_epoch(self, runner):
         if runner.log_buffer.ready:
             metrics = self.get_loggable_tags(runner)
-            runner.logger.info('--- Evaluation Results ---')
-            runner.logger.info('mAP: %.4f' % metrics['val/pts_bbox_NuScenes/mAP'])
-            runner.logger.info('mATE: %.4f' % metrics['val/pts_bbox_NuScenes/mATE'])
-            runner.logger.info('mASE: %.4f' % metrics['val/pts_bbox_NuScenes/mASE'])
-            runner.logger.info('mAOE: %.4f' % metrics['val/pts_bbox_NuScenes/mAOE'])
-            runner.logger.info('mAVE: %.4f' % metrics['val/pts_bbox_NuScenes/mAVE'])
-            runner.logger.info('mAAE: %.4f' % metrics['val/pts_bbox_NuScenes/mAAE'])
-            runner.logger.info('NDS: %.4f' % metrics['val/pts_bbox_NuScenes/NDS'])
+            val_metrics = {
+                key: value for key, value in metrics.items()
+                if key.startswith('val/')
+            }
+            if val_metrics:
+                runner.logger.info('--- Evaluation Results ---')
+                for key, value in sorted(val_metrics.items()):
+                    metric_name = key[len('val/'):]
+                    if isinstance(value, Number):
+                        runner.logger.info('%s: %.4f', metric_name, value)
+                    else:
+                        runner.logger.info('%s: %s', metric_name, value)
 
 
 @HOOKS.register_module()
@@ -165,17 +170,16 @@ class MyTensorboardLoggerHook(LoggerHook):
                 if key[:13] == 'train/d%d.loss' % i:
                     ignore = True
 
-            if key[:3] == 'val':
-                metric_name = key[22:]
-                if metric_name in ['mAP', 'mATE', 'mASE', 'mAOE', 'mAVE', 'mAAE', 'NDS']:
-                    key = 'val/' + metric_name
-                else:
-                    ignore = True
+            if key.startswith('val/'):
+                # Keep the dataset-provided metric path.  Company datasets use
+                # keys such as val/company/BEV_mAP@0.5, while nuScenes uses
+                # val/pts_bbox_NuScenes/mAP.
+                pass
 
             if self.get_mode(runner) == 'train' and key[:5] != 'train':
                 ignore = True
 
-            if self.get_mode(runner) != 'train' and key[:3] != 'val':
+            if self.get_mode(runner) != 'train' and not key.startswith('val/'):
                 ignore = True
 
             if ignore:
@@ -183,7 +187,7 @@ class MyTensorboardLoggerHook(LoggerHook):
 
             if key[:5] == 'train':
                 self.writer.add_scalar(key, value, self.get_iter(runner))
-            elif key[:3] == 'val':
+            elif key.startswith('val/'):
                 self.writer.add_scalar(key, value, self.get_epoch(runner))
 
     @master_only
