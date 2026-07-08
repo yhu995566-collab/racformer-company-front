@@ -20,3 +20,6 @@ data = dict(
 # tree.  On the server, the top-level `outputs` directory can be a data-disk
 # symlink without changing this config.
 evaluation_output_dir = 'outputs/racformer_company_front_velocity_v2/evaluation/'
+
+# Match checkpointing to the two-epoch validation cadence and limit disk use.
+checkpoint_config = dict(interval=2, max_keep_ckpts=3)
