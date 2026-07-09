@@ -49,13 +49,22 @@ def subsample(points, maximum):
 
 
 def distance_colors(points, forward_range):
-    """Return BGR colors from near red to far blue using forward distance."""
+    """Return BGR colors from near red to mid yellow to far blue."""
     if len(points) == 0:
         return np.zeros((0, 3), dtype=np.uint8)
     distance = np.clip(points[:, 0] / max(forward_range, 1e-6), 0.0, 1.0)
     colors = np.zeros((len(points), 3), dtype=np.uint8)
-    colors[:, 0] = np.rint(255 * distance).astype(np.uint8)
-    colors[:, 2] = np.rint(255 * (1.0 - distance)).astype(np.uint8)
+    near = distance <= 0.5
+    far = ~near
+
+    near_t = distance[near] * 2.0
+    colors[near, 1] = np.rint(255 * near_t).astype(np.uint8)
+    colors[near, 2] = 255
+
+    far_t = (distance[far] - 0.5) * 2.0
+    colors[far, 0] = np.rint(255 * far_t).astype(np.uint8)
+    colors[far, 1] = np.rint(255 * (1.0 - far_t)).astype(np.uint8)
+    colors[far, 2] = np.rint(255 * (1.0 - far_t)).astype(np.uint8)
     return colors
 
 

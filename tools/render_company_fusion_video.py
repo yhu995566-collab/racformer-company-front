@@ -60,11 +60,16 @@ def parse_args():
     parser.add_argument("--max-radar-points", type=int, default=15000)
     parser.add_argument("--radar-radius", type=int, default=1)
     parser.add_argument("--highlight-radius", type=int, default=2)
+    parser.add_argument(
+        "--camera-radar-alpha",
+        type=float,
+        default=0.45,
+        help="Opacity for radar points on the left camera panel only.")
     return parser.parse_args()
 
 
 def camera_panel(image, radar_xyz, highlighted, boxes, scores, projection,
-                 width, height, forward_range):
+                 width, height, forward_range, radar_alpha):
     panel = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR)
     source_height, source_width = panel.shape[:2]
     scale_x = width / source_width
@@ -73,19 +78,23 @@ def camera_panel(image, radar_xyz, highlighted, boxes, scores, projection,
 
     uv, _, valid = project(radar_xyz, projection, (source_height, source_width))
     colors = distance_colors(radar_xyz, forward_range)
+    radar_overlay = panel.copy()
     for index in np.flatnonzero(valid & ~highlighted):
         point = (int(round(uv[index, 0] * scale_x)),
                  int(round(uv[index, 1] * scale_y)))
         cv2.circle(
-            panel, point, 1,
+            radar_overlay, point, 1,
             tuple(int(value) for value in colors[index]), -1, cv2.LINE_AA)
     for index in np.flatnonzero(valid & highlighted):
         point = (int(round(uv[index, 0] * scale_x)),
                  int(round(uv[index, 1] * scale_y)))
         cv2.circle(
-            panel, point, 2,
+            radar_overlay, point, 1,
             tuple(int(value) for value in colors[index]), -1, cv2.LINE_AA)
-        cv2.circle(panel, point, 3, (0, 255, 0), 1, cv2.LINE_AA)
+        cv2.circle(radar_overlay, point, 2, (0, 255, 0), 1, cv2.LINE_AA)
+    cv2.addWeighted(
+        radar_overlay, np.clip(radar_alpha, 0.0, 1.0),
+        panel, 1.0 - np.clip(radar_alpha, 0.0, 1.0), 0.0, panel)
 
     for box, score in zip(boxes, scores):
         corners = box_corners(box)
@@ -191,7 +200,8 @@ def main():
 
             left = camera_panel(
                 image, radar_xyz, highlighted, boxes, scores, projection,
-                args.camera_width, args.height, args.forward_range)
+                args.camera_width, args.height, args.forward_range,
+                args.camera_radar_alpha)
             right = canvas.blank()
             draw_lidar(right, canvas, lidar[:, :3])
             draw_points_by_distance(right, canvas, radar_xyz, args.radar_radius)
