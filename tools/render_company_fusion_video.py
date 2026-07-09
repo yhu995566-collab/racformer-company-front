@@ -41,6 +41,14 @@ def parse_args():
     parser.add_argument("--nms-iou-threshold", type=float, default=0.2)
     parser.add_argument("--forward-range", type=float, default=100.0)
     parser.add_argument("--lateral-range", type=float, default=15.0)
+    parser.add_argument(
+        "--left-lateral-range",
+        type=float,
+        help="Vehicle-left / +ego-Y BEV range. Defaults to --lateral-range.")
+    parser.add_argument(
+        "--right-lateral-range",
+        type=float,
+        help="Vehicle-right / -ego-Y BEV range. Defaults to --lateral-range.")
     parser.add_argument("--fps", type=float, default=2.0)
     parser.add_argument("--height", type=int, default=720)
     parser.add_argument("--camera-width", type=int, default=960)
@@ -113,11 +121,20 @@ def main():
         raise ValueError(
             f"Prediction count {len(predictions)} != frame count {len(infos)}")
 
+    left_lateral_range = (
+        args.left_lateral_range
+        if args.left_lateral_range is not None else args.lateral_range)
+    right_lateral_range = (
+        args.right_lateral_range
+        if args.right_lateral_range is not None else args.lateral_range)
+
     class CanvasArgs:
         width = args.bev_width
         height = args.height
         forward_range = args.forward_range
         lateral_range = args.lateral_range
+        left_lateral_range = args.left_lateral_range
+        right_lateral_range = args.right_lateral_range
         margin = args.margin
 
     canvas = BevCanvas(CanvasArgs)
@@ -149,7 +166,8 @@ def main():
             radar_mask = (
                 (radar_xyz[:, 0] >= 0.0) &
                 (radar_xyz[:, 0] <= args.forward_range) &
-                (np.abs(radar_xyz[:, 1]) <= args.lateral_range))
+                (radar_xyz[:, 1] >= -right_lateral_range) &
+                (radar_xyz[:, 1] <= left_lateral_range))
             radar_xyz = radar_xyz[radar_mask]
 
             boxes, scores, _ = prediction_fields(
@@ -157,7 +175,8 @@ def main():
             box_mask = (
                 (boxes[:, 0] >= 0.0) &
                 (boxes[:, 0] <= args.forward_range) &
-                (np.abs(boxes[:, 1]) <= args.lateral_range))
+                (boxes[:, 1] >= -right_lateral_range) &
+                (boxes[:, 1] <= left_lateral_range))
             boxes = boxes[box_mask]
             scores = scores[box_mask]
             highlighted = points_inside_predictions(radar_xyz, boxes)

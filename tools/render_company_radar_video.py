@@ -22,6 +22,14 @@ def parse_args():
     parser.add_argument("--nms-iou-threshold", type=float, default=0.2)
     parser.add_argument("--forward-range", type=float, default=100.0)
     parser.add_argument("--lateral-range", type=float, default=15.0)
+    parser.add_argument(
+        "--left-lateral-range",
+        type=float,
+        help="Vehicle-left / +ego-Y BEV range. Defaults to --lateral-range.")
+    parser.add_argument(
+        "--right-lateral-range",
+        type=float,
+        help="Vehicle-right / -ego-Y BEV range. Defaults to --lateral-range.")
     parser.add_argument("--fps", type=float, default=2.0)
     parser.add_argument("--width", type=int, default=720)
     parser.add_argument("--height", type=int, default=1280)
@@ -45,12 +53,18 @@ class BevCanvas:
         self.width = args.width
         self.height = args.height
         self.forward = args.forward_range
-        self.lateral = args.lateral_range
+        self.left_lateral = (
+            args.left_lateral_range
+            if args.left_lateral_range is not None else args.lateral_range)
+        self.right_lateral = (
+            args.right_lateral_range
+            if args.right_lateral_range is not None else args.lateral_range)
         self.margin = args.margin
         self.scale = min(
-            (self.width - 2 * self.margin) / (2 * self.lateral),
+            (self.width - 2 * self.margin) /
+            (self.left_lateral + self.right_lateral),
             (self.height - 2 * self.margin) / self.forward)
-        self.center_u = self.width // 2
+        self.center_u = int(round(self.margin + self.left_lateral * self.scale))
         self.bottom_v = self.height - self.margin
 
     def pixels(self, xyz):
@@ -59,14 +73,15 @@ class BevCanvas:
         v = np.rint(self.bottom_v - xyz[:, 0] * self.scale).astype(np.int32)
         valid = (
             (xyz[:, 0] >= 0.0) & (xyz[:, 0] <= self.forward) &
-            (np.abs(xyz[:, 1]) <= self.lateral) &
+            (xyz[:, 1] >= -self.right_lateral) &
+            (xyz[:, 1] <= self.left_lateral) &
             (u >= 0) & (u < self.width) & (v >= 0) & (v < self.height))
         return u, v, valid
 
     def blank(self):
         frame = np.zeros((self.height, self.width, 3), dtype=np.uint8)
-        left = int(round(self.center_u - self.lateral * self.scale))
-        right = int(round(self.center_u + self.lateral * self.scale))
+        left = int(round(self.center_u - self.left_lateral * self.scale))
+        right = int(round(self.center_u + self.right_lateral * self.scale))
         top = int(round(self.bottom_v - self.forward * self.scale))
         cv2.rectangle(frame, (left, top), (right, self.bottom_v), (35, 35, 35), 1)
         for distance in range(50, int(self.forward) + 1, 50):
