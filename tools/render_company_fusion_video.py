@@ -11,8 +11,10 @@ from PIL import Image
 
 from render_company_radar_video import (
     BevCanvas,
+    distance_colors,
     draw_lidar,
-    draw_points,
+    draw_point_outlines,
+    draw_points_by_distance,
     draw_predictions,
     points_inside_predictions,
     subsample,
@@ -62,7 +64,7 @@ def parse_args():
 
 
 def camera_panel(image, radar_xyz, highlighted, boxes, scores, projection,
-                 width, height):
+                 width, height, forward_range):
     panel = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR)
     source_height, source_width = panel.shape[:2]
     scale_x = width / source_width
@@ -70,14 +72,20 @@ def camera_panel(image, radar_xyz, highlighted, boxes, scores, projection,
     panel = cv2.resize(panel, (width, height), interpolation=cv2.INTER_LINEAR)
 
     uv, _, valid = project(radar_xyz, projection, (source_height, source_width))
+    colors = distance_colors(radar_xyz, forward_range)
     for index in np.flatnonzero(valid & ~highlighted):
         point = (int(round(uv[index, 0] * scale_x)),
                  int(round(uv[index, 1] * scale_y)))
-        cv2.circle(panel, point, 1, (255, 255, 255), -1, cv2.LINE_AA)
+        cv2.circle(
+            panel, point, 1,
+            tuple(int(value) for value in colors[index]), -1, cv2.LINE_AA)
     for index in np.flatnonzero(valid & highlighted):
         point = (int(round(uv[index, 0] * scale_x)),
                  int(round(uv[index, 1] * scale_y)))
-        cv2.circle(panel, point, 2, (0, 255, 0), -1, cv2.LINE_AA)
+        cv2.circle(
+            panel, point, 2,
+            tuple(int(value) for value in colors[index]), -1, cv2.LINE_AA)
+        cv2.circle(panel, point, 3, (0, 255, 0), 1, cv2.LINE_AA)
 
     for box, score in zip(boxes, scores):
         corners = box_corners(box)
@@ -183,13 +191,11 @@ def main():
 
             left = camera_panel(
                 image, radar_xyz, highlighted, boxes, scores, projection,
-                args.camera_width, args.height)
+                args.camera_width, args.height, args.forward_range)
             right = canvas.blank()
             draw_lidar(right, canvas, lidar[:, :3])
-            draw_points(
-                right, canvas, radar_xyz[~highlighted],
-                (255, 255, 255), args.radar_radius)
-            draw_points(
+            draw_points_by_distance(right, canvas, radar_xyz, args.radar_radius)
+            draw_point_outlines(
                 right, canvas, radar_xyz[highlighted],
                 (0, 255, 0), args.highlight_radius)
             draw_predictions(right, canvas, boxes, scores)

@@ -48,6 +48,17 @@ def subsample(points, maximum):
     return points[indices]
 
 
+def distance_colors(points, forward_range):
+    """Return BGR colors from near red to far blue using forward distance."""
+    if len(points) == 0:
+        return np.zeros((0, 3), dtype=np.uint8)
+    distance = np.clip(points[:, 0] / max(forward_range, 1e-6), 0.0, 1.0)
+    colors = np.zeros((len(points), 3), dtype=np.uint8)
+    colors[:, 0] = np.rint(255 * distance).astype(np.uint8)
+    colors[:, 2] = np.rint(255 * (1.0 - distance)).astype(np.uint8)
+    return colors
+
+
 class BevCanvas:
     def __init__(self, args):
         self.width = args.width
@@ -113,6 +124,25 @@ def draw_points(frame, canvas, points, color, radius):
     u, v, valid = canvas.pixels(points)
     for px, py in zip(u[valid], v[valid]):
         cv2.circle(frame, (int(px), int(py)), radius, color, -1, cv2.LINE_AA)
+
+
+def draw_points_by_distance(frame, canvas, points, radius):
+    if len(points) == 0:
+        return
+    u, v, valid = canvas.pixels(points)
+    colors = distance_colors(points, canvas.forward)
+    for px, py, color in zip(u[valid], v[valid], colors[valid]):
+        cv2.circle(
+            frame, (int(px), int(py)), radius,
+            tuple(int(value) for value in color), -1, cv2.LINE_AA)
+
+
+def draw_point_outlines(frame, canvas, points, color, radius):
+    if len(points) == 0:
+        return
+    u, v, valid = canvas.pixels(points)
+    for px, py in zip(u[valid], v[valid]):
+        cv2.circle(frame, (int(px), int(py)), radius, color, 1, cv2.LINE_AA)
 
 
 def draw_lidar(frame, canvas, points):
@@ -195,10 +225,8 @@ def main():
             highlighted = points_inside_predictions(radar_xyz, boxes)
             frame = canvas.blank()
             draw_lidar(frame, canvas, lidar[:, :3])
-            draw_points(
-                frame, canvas, radar_xyz[~highlighted],
-                (255, 255, 255), args.radar_radius)
-            draw_points(
+            draw_points_by_distance(frame, canvas, radar_xyz, args.radar_radius)
+            draw_point_outlines(
                 frame, canvas, radar_xyz[highlighted],
                 (0, 255, 0), args.highlight_radius)
             draw_predictions(frame, canvas, boxes, scores)
