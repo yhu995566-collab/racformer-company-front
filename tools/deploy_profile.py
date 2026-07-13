@@ -121,6 +121,22 @@ def describe_value(value, name, indent=0):
             prefix, name, type(value).__name__, rendered))
 
 
+def clone_input_structure(value):
+    """Clone tensors/arrays in nested model inputs before in-place mutation."""
+    if torch.is_tensor(value):
+        return value.clone()
+    if isinstance(value, np.ndarray):
+        return value.copy()
+    if isinstance(value, dict):
+        return {
+            key: clone_input_structure(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [clone_input_structure(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(clone_input_structure(item) for item in value)
+    return value
+
+
 def prepare_batch(dataset, sample_index):
     sample = dataset[sample_index]
     batch = collate([sample], samples_per_gpu=1)
@@ -234,7 +250,9 @@ def profile(args):
 
     def forward_pre_hook(_module, _args, kwargs):
         if hook_state["capture"]:
-            hook_state["kwargs"] = kwargs
+            # RaCFormerTransformer replaces img_metas[0]['lidar2img'] with a
+            # CUDA tensor in-place. Capture a clean pre-forward snapshot.
+            hook_state["kwargs"] = clone_input_structure(kwargs)
         if hook_state["breakdown"]:
             # MMCV scatter can use auxiliary CUDA streams. Synchronizing here
             # makes this a complete CPU-to-GPU transfer wall-time boundary.
@@ -382,11 +400,14 @@ def profile(args):
     hook_state["capture"] = False
     cached_kwargs = hook_state["kwargs"]
     hook_state["kwargs"] = None
+    cached_img_metas = clone_input_structure(cached_kwargs["img_metas"])
     del cached_sample, cached_batch, cached_setup_result, result
 
     print("\n=== Cached-batch warmup ===")
     with torch.no_grad():
         for _ in range(args.warmup):
+            cached_kwargs["img_metas"] = clone_input_structure(
+                cached_img_metas)
             model.module(**cached_kwargs)
     torch.cuda.synchronize()
     torch.cuda.empty_cache()
@@ -399,6 +420,8 @@ def profile(args):
     print("\n=== Cached-batch timed iterations ===")
     with torch.no_grad():
         for _ in range(args.iters):
+            cached_kwargs["img_metas"] = clone_input_structure(
+                cached_img_metas)
             cached_start = time.perf_counter()
             hook_state["timing"] = True
             result = model.module(**cached_kwargs)
