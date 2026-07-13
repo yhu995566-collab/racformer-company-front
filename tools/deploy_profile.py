@@ -37,6 +37,29 @@ class Tee:
         self.output_file.flush()
 
 
+class TimedTransform:
+    """Measure a dataset pipeline transform while preserving its behavior."""
+
+    def __init__(self, transform, timing_state):
+        self.transform = transform
+        self.timing_state = timing_state
+        self.name = type(transform).__name__
+
+    def __call__(self, data):
+        if not self.timing_state["enabled"]:
+            return self.transform(data)
+        start = time.perf_counter()
+        try:
+            return self.transform(data)
+        finally:
+            elapsed_ms = (time.perf_counter() - start) * 1000.0
+            current = self.timing_state["current"]
+            current[self.name] = current.get(self.name, 0.0) + elapsed_ms
+
+    def __repr__(self):
+        return repr(self.transform)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Profile one RaCFormer sample with PyTorch")
@@ -48,7 +71,7 @@ def parse_args():
     parser.add_argument("--iters", type=int, default=50)
     parser.add_argument(
         "--out",
-        default="outputs/deploy_baseline/profile_result_gpu3.txt")
+        default="outputs/deploy_baseline/profile_breakdown_gpu3.txt")
     args = parser.parse_args()
 
     if args.sample_index < 0:
@@ -104,6 +127,16 @@ def prepare_batch(dataset, sample_index):
     return sample, batch
 
 
+def install_pipeline_timers(dataset, timing_state):
+    pipeline = getattr(dataset, "pipeline", None)
+    transforms = getattr(pipeline, "transforms", None)
+    if transforms is None:
+        return False
+    pipeline.transforms = [
+        TimedTransform(transform, timing_state) for transform in transforms]
+    return True
+
+
 def percentile_summary(values):
     values = np.asarray(values, dtype=np.float64)
     return {
@@ -120,6 +153,10 @@ def print_summary(label, summary):
         "{}: mean={mean:.3f} ms, p50={p50:.3f} ms, "
         "p95={p95:.3f} ms, min={min:.3f} ms, max={max:.3f} ms".format(
             label, **summary))
+
+
+def append_timing(timings, name, value):
+    timings.setdefault(name, []).append(value)
 
 
 def extract_prediction(result):
@@ -156,6 +193,10 @@ def profile(args):
             "sample index {} is outside dataset of length {}".format(
                 args.sample_index, len(dataset)))
 
+    pipeline_timing = {"enabled": False, "current": {}}
+    pipeline_timers_installed = install_pipeline_timers(
+        dataset, pipeline_timing)
+
     model = build_model(cfg.model)
     model.cuda()
     model.eval()
@@ -182,11 +223,24 @@ def profile(args):
 
     start_event = torch.cuda.Event(enable_timing=True)
     end_event = torch.cuda.Event(enable_timing=True)
-    hook_state = {"capture": False, "timing": False, "kwargs": None}
+    hook_state = {
+        "capture": False,
+        "timing": False,
+        "breakdown": False,
+        "kwargs": None,
+        "scatter_start": None,
+        "scatter_ms": None,
+    }
 
     def forward_pre_hook(_module, _args, kwargs):
         if hook_state["capture"]:
             hook_state["kwargs"] = kwargs
+        if hook_state["breakdown"]:
+            # MMCV scatter can use auxiliary CUDA streams. Synchronizing here
+            # makes this a complete CPU-to-GPU transfer wall-time boundary.
+            torch.cuda.synchronize()
+            hook_state["scatter_ms"] = (
+                time.perf_counter() - hook_state["scatter_start"]) * 1000.0
         if hook_state["timing"]:
             start_event.record()
 
@@ -228,37 +282,151 @@ def profile(args):
 
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats()
-    forward_times = []
-    end_to_end_times = []
+    raw_timings = {}
+    transform_timings = {}
     result = None
 
     print("Completed {} warmup iterations".format(args.warmup))
-    print("\n=== Timed iterations ===")
+    print("\n=== Fresh-batch end-to-end timed iterations ===")
     with torch.no_grad():
         for _ in range(args.iters):
             end_to_end_start = time.perf_counter()
-            _, current_batch = prepare_batch(dataset, args.sample_index)
 
+            pipeline_timing["current"] = {}
+            pipeline_timing["enabled"] = True
+            dataset_start = time.perf_counter()
+            try:
+                current_sample = dataset[args.sample_index]
+            finally:
+                pipeline_timing["enabled"] = False
+            dataset_ms = (time.perf_counter() - dataset_start) * 1000.0
+
+            collate_start = time.perf_counter()
+            current_batch = collate([current_sample], samples_per_gpu=1)
+            collate_ms = (time.perf_counter() - collate_start) * 1000.0
+            del current_sample
+
+            hook_state["scatter_start"] = time.perf_counter()
+            hook_state["breakdown"] = True
             hook_state["timing"] = True
             result = model(return_loss=False, rescale=True, **current_batch)
             hook_state["timing"] = False
+            hook_state["breakdown"] = False
             torch.cuda.synchronize()
+            forward_ms = start_event.elapsed_time(end_event)
 
-            end_to_end_times.append(
-                (time.perf_counter() - end_to_end_start) * 1000.0)
-            forward_times.append(start_event.elapsed_time(end_event))
-            del current_batch
+            parse_start = time.perf_counter()
+            parsed_prediction = extract_prediction(result)
+            _output_shapes = (
+                tuple(parsed_prediction["boxes_3d"].tensor.shape),
+                tuple(parsed_prediction["scores_3d"].shape),
+                tuple(parsed_prediction["labels_3d"].shape),
+            )
+            output_parse_ms = (time.perf_counter() - parse_start) * 1000.0
+            end_to_end_ms = (
+                time.perf_counter() - end_to_end_start) * 1000.0
+            scatter_ms = hook_state["scatter_ms"]
+            accounted_ms = (
+                dataset_ms + collate_ms + scatter_ms + forward_ms +
+                output_parse_ms)
+
+            append_timing(raw_timings, "dataset[index]", dataset_ms)
+            append_timing(raw_timings, "collate / batch wrapping", collate_ms)
+            append_timing(
+                raw_timings, "scatter / move-to-GPU", scatter_ms)
+            append_timing(
+                raw_timings, "model forward (includes decode)", forward_ms)
+            append_timing(
+                raw_timings, "output structure parsing", output_parse_ms)
+            append_timing(
+                raw_timings, "unattributed framework overhead",
+                max(0.0, end_to_end_ms - accounted_ms))
+            append_timing(raw_timings, "end-to-end", end_to_end_ms)
+            for name, elapsed_ms in pipeline_timing["current"].items():
+                append_timing(transform_timings, name, elapsed_ms)
+            transform_total_ms = sum(pipeline_timing["current"].values())
+            append_timing(
+                transform_timings, "dataset bookkeeping outside transforms",
+                max(0.0, dataset_ms - transform_total_ms))
+            del current_batch, parsed_prediction
+
+    raw_allocated_mb = torch.cuda.max_memory_allocated() / (1024.0 ** 2)
+    raw_reserved_mb = torch.cuda.max_memory_reserved() / (1024.0 ** 2)
+
+    print("\n=== Fresh-batch end-to-end latency breakdown ===")
+    for name, values in raw_timings.items():
+        print_summary(name, percentile_summary(values))
+    print("Postprocess / result decode: included inside model forward via "
+          "pts_bbox_head.get_bboxes() and bbox3d2result(); there is no "
+          "separate decode stage after model.forward().")
+    print("raw max_memory_allocated: {:.2f} MB".format(raw_allocated_mb))
+    print("raw max_memory_reserved: {:.2f} MB".format(raw_reserved_mb))
+
+    print("\n=== Dataset pipeline transform breakdown ===")
+    if pipeline_timers_installed:
+        for name, values in transform_timings.items():
+            print_summary(name, percentile_summary(values))
+    else:
+        print("Per-transform timing unavailable: dataset.pipeline.transforms "
+              "was not found")
+
+    # Build and scatter one batch once. The captured kwargs are exactly what
+    # MMDataParallel passes to RaCFormer, with tensors already on the GPU and
+    # CPU-only metadata preserved for the model's NumPy calibration code.
+    hook_state["capture"] = True
+    cached_sample, cached_batch = prepare_batch(dataset, args.sample_index)
+    with torch.no_grad():
+        cached_setup_result = model(
+            return_loss=False, rescale=True, **cached_batch)
+    torch.cuda.synchronize()
+    hook_state["capture"] = False
+    cached_kwargs = hook_state["kwargs"]
+    hook_state["kwargs"] = None
+    del cached_sample, cached_batch, cached_setup_result, result
+
+    print("\n=== Cached-batch warmup ===")
+    with torch.no_grad():
+        for _ in range(args.warmup):
+            model.module(**cached_kwargs)
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache()
+    torch.cuda.reset_peak_memory_stats()
+
+    cached_forward_times = []
+    cached_wall_times = []
+    result = None
+    print("Completed {} cached-batch warmup iterations".format(args.warmup))
+    print("\n=== Cached-batch timed iterations ===")
+    with torch.no_grad():
+        for _ in range(args.iters):
+            cached_start = time.perf_counter()
+            hook_state["timing"] = True
+            result = model.module(**cached_kwargs)
+            hook_state["timing"] = False
+            torch.cuda.synchronize()
+            cached_wall_times.append(
+                (time.perf_counter() - cached_start) * 1000.0)
+            cached_forward_times.append(start_event.elapsed_time(end_event))
+
+    cached_allocated_mb = torch.cuda.max_memory_allocated() / (1024.0 ** 2)
+    cached_reserved_mb = torch.cuda.max_memory_reserved() / (1024.0 ** 2)
+
+    print("\n=== Cached-batch results ===")
+    print("Cached-batch timing excludes dataset[index], collate, and "
+          "scatter / move-to-GPU.")
+    print_summary(
+        "cached-batch GPU forward latency",
+        percentile_summary(cached_forward_times))
+    print_summary(
+        "cached-batch synchronized wall latency",
+        percentile_summary(cached_wall_times))
+    print("cached max_memory_allocated: {:.2f} MB".format(
+        cached_allocated_mb))
+    print("cached max_memory_reserved: {:.2f} MB".format(
+        cached_reserved_mb))
 
     pre_hook_handle.remove()
     forward_hook_handle.remove()
-
-    allocated_mb = torch.cuda.max_memory_allocated() / (1024.0 ** 2)
-    reserved_mb = torch.cuda.max_memory_reserved() / (1024.0 ** 2)
-
-    print_summary("GPU forward latency", percentile_summary(forward_times))
-    print_summary("End-to-end latency", percentile_summary(end_to_end_times))
-    print("max_memory_allocated: {:.2f} MB".format(allocated_mb))
-    print("max_memory_reserved: {:.2f} MB".format(reserved_mb))
 
     prediction = extract_prediction(result)
     boxes = prediction["boxes_3d"]
