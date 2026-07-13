@@ -215,15 +215,17 @@ def profile(args):
     hook_state["capture"] = False
     print("\n=== Actual model kwargs after CUDA scatter ===")
     describe_value(hook_state["kwargs"], "kwargs")
+    hook_state["kwargs"] = None
+    del sample, batch, result
 
     print("\n=== Warmup ===")
     with torch.no_grad():
         for _ in range(args.warmup):
-            model(return_loss=False, rescale=True, **batch)
+            _, warmup_batch = prepare_batch(dataset, args.sample_index)
+            model(return_loss=False, rescale=True, **warmup_batch)
+            del warmup_batch
     torch.cuda.synchronize()
 
-    hook_state["kwargs"] = None
-    del sample, batch, result
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats()
     forward_times = []
