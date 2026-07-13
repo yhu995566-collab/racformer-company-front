@@ -180,31 +180,55 @@ def profile(args):
     print("PyTorch: {}".format(torch.__version__))
     print("CUDA runtime: {}".format(torch.version.cuda))
 
+    start_event = torch.cuda.Event(enable_timing=True)
+    end_event = torch.cuda.Event(enable_timing=True)
+    hook_state = {"capture": False, "timing": False, "kwargs": None}
+
+    def forward_pre_hook(_module, _args, kwargs):
+        if hook_state["capture"]:
+            hook_state["kwargs"] = kwargs
+        if hook_state["timing"]:
+            start_event.record()
+
+    def forward_hook(_module, _args, _kwargs, _output):
+        if hook_state["timing"]:
+            end_event.record()
+
+    pre_hook_handle = model.module.register_forward_pre_hook(
+        forward_pre_hook, with_kwargs=True)
+    forward_hook_handle = model.module.register_forward_hook(
+        forward_hook, with_kwargs=True)
+
     sample, batch = prepare_batch(dataset, args.sample_index)
-    forward_kwargs = dict(return_loss=False, rescale=True, **batch)
-    _, scattered_kwargs = model.scatter((), forward_kwargs, model.device_ids)
 
     print("\n=== Dataset pipeline sample ===")
     describe_value(sample, "sample")
     print("\n=== Collated batch ===")
     describe_value(batch, "batch")
+
+    # Run through MMDataParallel so MMCV unwraps nested DataContainers exactly
+    # as it does in val.py. The pre-hook sees kwargs after that scatter step.
+    hook_state["capture"] = True
+    with torch.no_grad():
+        result = model(return_loss=False, rescale=True, **batch)
+    torch.cuda.synchronize()
+    hook_state["capture"] = False
     print("\n=== Actual model kwargs after CUDA scatter ===")
-    describe_value(scattered_kwargs[0], "kwargs")
+    describe_value(hook_state["kwargs"], "kwargs")
 
     print("\n=== Warmup ===")
     with torch.no_grad():
         for _ in range(args.warmup):
-            model.module(**scattered_kwargs[0])
+            model(return_loss=False, rescale=True, **batch)
     torch.cuda.synchronize()
 
-    del sample, batch, forward_kwargs, scattered_kwargs
+    hook_state["kwargs"] = None
+    del sample, batch, result
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats()
     forward_times = []
     end_to_end_times = []
     result = None
-    start_event = torch.cuda.Event(enable_timing=True)
-    end_event = torch.cuda.Event(enable_timing=True)
 
     print("Completed {} warmup iterations".format(args.warmup))
     print("\n=== Timed iterations ===")
@@ -212,20 +236,19 @@ def profile(args):
         for _ in range(args.iters):
             end_to_end_start = time.perf_counter()
             _, current_batch = prepare_batch(dataset, args.sample_index)
-            current_kwargs = dict(
-                return_loss=False, rescale=True, **current_batch)
-            _, current_scattered_kwargs = model.scatter(
-                (), current_kwargs, model.device_ids)
 
-            start_event.record()
-            result = model.module(**current_scattered_kwargs[0])
-            end_event.record()
+            hook_state["timing"] = True
+            result = model(return_loss=False, rescale=True, **current_batch)
+            hook_state["timing"] = False
             torch.cuda.synchronize()
 
             end_to_end_times.append(
                 (time.perf_counter() - end_to_end_start) * 1000.0)
             forward_times.append(start_event.elapsed_time(end_event))
-            del current_batch, current_kwargs, current_scattered_kwargs
+            del current_batch
+
+    pre_hook_handle.remove()
+    forward_hook_handle.remove()
 
     allocated_mb = torch.cuda.max_memory_allocated() / (1024.0 ** 2)
     reserved_mb = torch.cuda.max_memory_reserved() / (1024.0 ** 2)
