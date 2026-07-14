@@ -79,6 +79,33 @@ them with `--box-atol`, `--score-atol`, and `--rtol` when needed. Real inference
 validation is intentionally performed on the GPU server, not on development
 machines.
 
+## Deployment Profiling
+
+After parity passes, profile the LiDAR-free path on an approved GPU:
+
+```bash
+read -rp "Physical GPU index approved for this run: " GPU_ID
+export CUDA_VISIBLE_DEVICES="${GPU_ID}"
+
+python -m deploy.profile \
+  --config configs/deploy/racformer_company_front_left_pytorch.py \
+  --weights /mnt/diskNvme1/hyh/results/RaCFormer/racformer_company_front_velocity_v2/2026-07-07/18-46-40/epoch_36.pth \
+  --device cuda:0 \
+  --split val \
+  --sample-index 0 \
+  --warmup 10 \
+  --iters 50 \
+  --out outputs/deploy_baseline/deploy_profile.txt
+```
+
+The report separates three latency definitions:
+
+- Mode A includes offline image/radar file reads and is comparable to the old
+  dataset-driven end-to-end profile.
+- Mode B assumes synchronized sensor frames already exist and measures runtime
+  preprocessing, transfer, model forward, and output transfer/parsing.
+- Mode C reuses a prepared GPU batch and measures the model-only floor.
+
 ## Synchronization
 
 Deployment code lives in the same Git repository as training code. Update a
