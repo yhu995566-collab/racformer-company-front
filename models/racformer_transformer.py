@@ -536,13 +536,26 @@ class BEVSampling(BaseModule):
         
         scale_weights = scale_weights.expand(B, Q, self.num_heads, self.num_frames, self.num_levels, self.depth_num*self.num_points).contiguous()
 
-        # sampling
-        bev_mask = torch.zeros((B, bev_h, bev_w),
-                               device=bev_feats.device).to(bev_feats.dtype)
-        bev_pos = self.positional_encoding(bev_mask).to(bev_feats.dtype)
-        bev_pos = bev_pos.view(B, 1, self.embed_dims, bev_h, bev_w).repeat(1,self.num_frames,1,1,1)
+        # A deployment cache may already hold the projected, query-independent
+        # BEV value. In that case this large input is not consumed.
+        value_proj = self.attention.value_proj
+        skip_value_preparation = (
+            getattr(value_proj, '_deploy_skip_input_preparation', False)
+            and getattr(value_proj, '_deploy_output_cache_hit', False))
+        if skip_value_preparation:
+            attention_value = None
+        else:
+            bev_mask = torch.zeros(
+                (B, bev_h, bev_w), device=bev_feats.device).to(bev_feats.dtype)
+            bev_pos = self.positional_encoding(bev_mask).to(bev_feats.dtype)
+            bev_pos = bev_pos.view(
+                B, 1, self.embed_dims, bev_h, bev_w).repeat(
+                    1, self.num_frames, 1, 1, 1)
+            attention_value = bev_feats + bev_pos
         
-        sampled_feats = self.attention(query_feat, bev_feats+bev_pos, sampling_points, scale_weights, spatial_shapes=(bev_h, bev_w))
+        sampled_feats = self.attention(
+            query_feat, attention_value, sampling_points, scale_weights,
+            spatial_shapes=(bev_h, bev_w))
 
         return sampled_feats
         

@@ -49,6 +49,8 @@ def parse_args():
     parser.add_argument(
         '--cache-bev-value-projections', action='store_true')
     parser.add_argument(
+        '--skip-cached-bev-value-preparation', action='store_true')
+    parser.add_argument(
         '--out', default='outputs/deploy_baseline/deploy_profile.txt')
     args = parser.parse_args()
     if args.sample_index < 0:
@@ -135,7 +137,9 @@ def profile(args):
     runner = RaCFormerPyTorchRunner(
         args.config, args.weights, device=args.device,
         cache_radar_temporal=args.cache_radar_temporal,
-        cache_bev_value_projections=args.cache_bev_value_projections)
+        cache_bev_value_projections=args.cache_bev_value_projections,
+        skip_cached_bev_value_preparation=(
+            args.skip_cached_bev_value_preparation))
     start_event = torch.cuda.Event(enable_timing=True)
     end_event = torch.cuda.Event(enable_timing=True)
 
@@ -151,6 +155,8 @@ def profile(args):
         'enabled' if args.cache_radar_temporal else 'disabled'))
     print('BEV value projection caches: {}'.format(
         'enabled' if args.cache_bev_value_projections else 'disabled'))
+    print('skip cached BEV value preparation: {}'.format(
+        'enabled' if args.skip_cached_bev_value_preparation else 'disabled'))
     print('model forward includes get_bboxes() and bbox3d2result() decode')
 
     cached_frames = load_frames(

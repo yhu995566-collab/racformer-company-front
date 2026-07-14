@@ -159,13 +159,15 @@ class BEVSelfAttention(BaseModule):
         B, Q, C = query.shape
         if identity is None:
             identity = query
-        value = value.view(B*self.num_bev_queue, C, -1).permute(0,2,1)
-        if not self.batch_first:
-            value = value.permute(1, 0, 2)
         bs,  num_query, _ = query.shape
-        _, num_value, _ = value.shape
+        if value is not None:
+            value = value.view(
+                B*self.num_bev_queue, C, -1).permute(0, 2, 1)
+            if not self.batch_first:
+                value = value.permute(1, 0, 2)
 
         value = self.value_proj(value)
+        _, num_value, _ = value.shape
 
         if key_padding_mask is not None:
             value = value.masked_fill(key_padding_mask[..., None], 0.0)

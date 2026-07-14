@@ -35,6 +35,8 @@ def parse_args():
     parser.add_argument('--cache-radar-temporal', action='store_true')
     parser.add_argument(
         '--cache-bev-value-projections', action='store_true')
+    parser.add_argument(
+        '--skip-cached-bev-value-preparation', action='store_true')
     parser.add_argument('--out')
     return parser.parse_args()
 
@@ -164,7 +166,9 @@ def main():
     runner = RaCFormerPyTorchRunner(
         args.config, args.weights, device=args.device,
         cache_radar_temporal=args.cache_radar_temporal,
-        cache_bev_value_projections=args.cache_bev_value_projections)
+        cache_bev_value_projections=args.cache_bev_value_projections,
+        skip_cached_bev_value_preparation=(
+            args.skip_cached_bev_value_preparation))
     prediction = runner.infer(runner.prepare(batch))
 
     print('boxes_3d shape: {}'.format(prediction.boxes_3d.shape))

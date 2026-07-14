@@ -49,26 +49,36 @@ class _PerForwardRadarTemporalCache:
 class _PerForwardModuleOutputCache:
     """Cache one module output until the enclosing model forward ends."""
 
-    def __init__(self, module):
+    def __init__(self, module, expose_cache_hit=False):
         self.module = module
         self.original_forward = module.forward
+        self.expose_cache_hit = expose_cache_hit
         self.active = False
         self.cached_output = None
+        if expose_cache_hit:
+            module._deploy_skip_input_preparation = True
+            module._deploy_output_cache_hit = False
         module.forward = self.forward
 
     def begin(self):
         self.active = True
         self.cached_output = None
+        if self.expose_cache_hit:
+            self.module._deploy_output_cache_hit = False
 
     def end(self):
         self.active = False
         self.cached_output = None
+        if self.expose_cache_hit:
+            self.module._deploy_output_cache_hit = False
 
     def forward(self, *args, **kwargs):
         if not self.active:
             return self.original_forward(*args, **kwargs)
         if self.cached_output is None:
             self.cached_output = self.original_forward(*args, **kwargs)
+            if self.expose_cache_hit:
+                self.module._deploy_output_cache_hit = True
         return self.cached_output
 
 
@@ -77,9 +87,15 @@ class RaCFormerPyTorchRunner:
 
     def __init__(self, config, weights, device='cuda:0',
                  cache_radar_temporal=False,
-                 cache_bev_value_projections=False):
+                 cache_bev_value_projections=False,
+                 skip_cached_bev_value_preparation=False):
         if not torch.cuda.is_available():
             raise RuntimeError('RaCFormer deployment requires a CUDA device')
+        if skip_cached_bev_value_preparation and \
+                not cache_bev_value_projections:
+            raise ValueError(
+                'skipping BEV value preparation requires '
+                'cache_bev_value_projections')
         self.device = torch.device(device)
         torch.cuda.set_device(self.device)
         set_random_seed(0, deterministic=True)
@@ -105,9 +121,11 @@ class RaCFormerPyTorchRunner:
             layer = self.model.pts_bbox_head.transformer.decoder.decoder_layer
             self.forward_caches.extend([
                 _PerForwardModuleOutputCache(
-                    layer.sampling_radar_bev.attention.value_proj),
+                    layer.sampling_radar_bev.attention.value_proj,
+                    expose_cache_hit=skip_cached_bev_value_preparation),
                 _PerForwardModuleOutputCache(
-                    layer.sampling_lss_bev.attention.value_proj),
+                    layer.sampling_lss_bev.attention.value_proj,
+                    expose_cache_hit=skip_cached_bev_value_preparation),
             ])
 
     def prepare(self, batch, non_blocking=False):
