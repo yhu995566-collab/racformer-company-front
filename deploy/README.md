@@ -39,17 +39,36 @@ message fields, synchronization, and calibration ownership are confirmed.
 
 ## Server Validation
 
-Run from the repository root in the existing `racformer_wp` environment:
+Run from the repository root in the existing `racformer_wp` environment.
+First inspect the shared server instead of assuming a fixed physical GPU:
 
 ```bash
-CUDA_VISIBLE_DEVICES=3 python -m deploy.offline_demo \
+nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu \
+  --format=csv
+nvidia-smi pmon -c 1
+```
+
+Confirm process ownership or team reservations, then expose one selected GPU.
+Inside the process it becomes logical `cuda:0`:
+
+```bash
+read -rp "Physical GPU index approved for this run: " GPU_ID
+export CUDA_VISIBLE_DEVICES="${GPU_ID}"
+
+python -m deploy.offline_demo \
   --config configs/deploy/racformer_company_front_left_pytorch.py \
   --weights /mnt/diskNvme1/hyh/results/RaCFormer/racformer_company_front_velocity_v2/2026-07-07/18-46-40/epoch_36.pth \
+  --device cuda:0 \
   --split val \
   --sample-index 0 \
   --reference-pkl outputs/deploy_baseline/velocity_v2_epoch36_val_preds_gpu3.pkl \
-  --out outputs/deploy_baseline/deploy_sample0_gpu3.npz
+  --out outputs/deploy_baseline/deploy_sample0.npz
 ```
+
+The `gpu3` suffix in the existing reference filename only records which GPU
+created that historical baseline; it does not require future runs to use GPU 3.
+List available reference files with
+`find outputs/deploy_baseline -maxdepth 1 -name '*.pkl' -type f` before running.
 
 The command must report matching boxes, scores, and labels before this path is
 used as the ROS integration base. Default parity tolerances are `5e-3` absolute

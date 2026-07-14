@@ -130,6 +130,20 @@ def compare_reference(prediction, reference_path, sample_index,
 
 def main():
     args = parse_args()
+    if args.reference_pkl and not os.path.isfile(args.reference_pkl):
+        reference_dir = os.path.dirname(args.reference_pkl) or '.'
+        candidates = []
+        if os.path.isdir(reference_dir):
+            candidates = sorted(
+                name for name in os.listdir(reference_dir)
+                if name.endswith('.pkl'))
+        message = 'reference PKL does not exist: {}'.format(
+            os.path.abspath(args.reference_pkl))
+        if candidates:
+            message += '\navailable PKL files in {}: {}'.format(
+                os.path.abspath(reference_dir), ', '.join(candidates))
+        raise FileNotFoundError(message)
+
     cfg = Config.fromfile(args.config)
     importlib.import_module('models')
     importlib.import_module('loaders')
