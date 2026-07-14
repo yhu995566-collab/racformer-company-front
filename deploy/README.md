@@ -17,6 +17,12 @@ unchanged and replaces the validation dataset pipeline with runtime inputs.
 
 The runtime path does not load LiDAR, generate `gt_depth`, use
 `FrontViewFilter`, or construct OpenMMLab `DataContainer` objects.
+The deployment config also sets the offline `val` and `test` dataset pipelines
+to empty lists. `offline_demo.py` rejects a non-empty pipeline so these stages
+cannot be reintroduced silently by passing the training config.
+
+`radar_depth` and `radar_rcs` remain required. They are runtime radar-fusion
+inputs generated from radar points, not LiDAR-derived ground-truth depth.
 
 ## Modules
 

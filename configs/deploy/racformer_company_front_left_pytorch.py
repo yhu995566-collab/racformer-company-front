@@ -1,5 +1,12 @@
 _base_ = ['../racformer_company_front_velocity_v2.py']
 
+# The offline deployment checker only calls dataset.get_data_info(). Keeping
+# these pipelines empty prevents accidental LiDAR loading, GT-depth generation,
+# FrontViewFilter, formatting, or DataContainer collation.
+data = dict(
+    val=dict(pipeline=[]),
+    test=dict(pipeline=[]))
+
 # Deployment code reads this section directly. Model/checkpoint semantics are
 # inherited unchanged from the trained velocity-v2 experiment.
 deployment = dict(

@@ -113,6 +113,10 @@ def main():
     importlib.import_module('models')
     importlib.import_module('loaders')
     dataset = build_dataset(cfg.data[args.split])
+    transforms = getattr(getattr(dataset, 'pipeline', None), 'transforms', [])
+    if transforms:
+        raise RuntimeError(
+            'deployment dataset pipeline must be empty; use the deploy config')
     if args.sample_index < 0 or args.sample_index >= len(dataset):
         raise IndexError('sample index is outside the dataset')
 
