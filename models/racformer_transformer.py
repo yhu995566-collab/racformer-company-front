@@ -520,7 +520,20 @@ class BEVSampling(BaseModule):
         sampling_points = xy2theta_d_coods(sampling_points, self.pc_range)
         
         sampling_points = sampling_points.reshape(B, Q, self.num_frames, self.num_heads, self.num_points, self.depth_num, 2)
-        sampling_points_d = torch.linspace(-d_region, d_region, self.depth_num).view(1,1,self.depth_num).repeat(B, Q, 1).to(query_bbox.device)
+        depth_grid_cache = getattr(self, '_deploy_depth_grid_cache', None)
+        if depth_grid_cache is None:
+            sampling_points_d = torch.linspace(
+                -d_region, d_region, self.depth_num).view(
+                    1, 1, self.depth_num).repeat(B, Q, 1).to(
+                        query_bbox.device)
+        else:
+            depth_grid_key = (float(d_region), query_bbox.device)
+            if depth_grid_key not in depth_grid_cache:
+                depth_grid_cache[depth_grid_key] = torch.linspace(
+                    -d_region, d_region, self.depth_num).view(
+                        1, 1, self.depth_num).to(query_bbox.device)
+            sampling_points_d = depth_grid_cache[depth_grid_key].repeat(
+                B, Q, 1)
         sampling_points_d = sampling_points_d + (self.ray_points_offset(query_feat).sigmoid()*2-1)*d_region/self.depth_num/2
         sampling_points_d = sampling_points_d.view(B, Q, 1, 1, 1, self.depth_num, 1).repeat(1, 1, self.num_frames, self.num_heads, self.num_points, 1, 1)
         

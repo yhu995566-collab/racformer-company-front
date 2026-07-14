@@ -88,7 +88,8 @@ class RaCFormerPyTorchRunner:
     def __init__(self, config, weights, device='cuda:0',
                  cache_radar_temporal=False,
                  cache_bev_value_projections=False,
-                 skip_cached_bev_value_preparation=False):
+                 skip_cached_bev_value_preparation=False,
+                 cache_bev_depth_grids=False):
         if not torch.cuda.is_available():
             raise RuntimeError('RaCFormer deployment requires a CUDA device')
         if skip_cached_bev_value_preparation and \
@@ -127,6 +128,10 @@ class RaCFormerPyTorchRunner:
                     layer.sampling_lss_bev.attention.value_proj,
                     expose_cache_hit=skip_cached_bev_value_preparation),
             ])
+        if cache_bev_depth_grids:
+            layer = self.model.pts_bbox_head.transformer.decoder.decoder_layer
+            layer.sampling_radar_bev._deploy_depth_grid_cache = {}
+            layer.sampling_lss_bev._deploy_depth_grid_cache = {}
 
     def prepare(self, batch, non_blocking=False):
         if not isinstance(batch, PreparedBatch):

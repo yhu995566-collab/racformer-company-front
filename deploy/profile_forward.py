@@ -152,6 +152,7 @@ def parse_args():
         '--cache-bev-value-projections', action='store_true')
     parser.add_argument(
         '--skip-cached-bev-value-preparation', action='store_true')
+    parser.add_argument('--cache-bev-depth-grids', action='store_true')
     parser.add_argument(
         '--out', default='outputs/deploy_baseline/forward_profile.txt')
     args = parser.parse_args()
@@ -544,7 +545,8 @@ def profile(args):
         cache_radar_temporal=args.cache_radar_temporal,
         cache_bev_value_projections=args.cache_bev_value_projections,
         skip_cached_bev_value_preparation=(
-            args.skip_cached_bev_value_preparation))
+            args.skip_cached_bev_value_preparation),
+        cache_bev_depth_grids=args.cache_bev_depth_grids)
     frames = load_frames(dataset, args.sample_index, preprocessor.num_frames)
     batch = runner.prepare(preprocessor.prepare(frames))
     start_event = torch.cuda.Event(enable_timing=True)
@@ -565,6 +567,8 @@ def profile(args):
         'enabled' if args.cache_bev_value_projections else 'disabled'))
     print('skip cached BEV value preparation: {}'.format(
         'enabled' if args.skip_cached_bev_value_preparation else 'disabled'))
+    print('BEV depth grid caches: {}'.format(
+        'enabled' if args.cache_bev_depth_grids else 'disabled'))
 
     for _ in range(args.warmup):
         runner.infer_raw(batch)

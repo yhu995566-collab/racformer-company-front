@@ -37,6 +37,7 @@ def parse_args():
         '--cache-bev-value-projections', action='store_true')
     parser.add_argument(
         '--skip-cached-bev-value-preparation', action='store_true')
+    parser.add_argument('--cache-bev-depth-grids', action='store_true')
     parser.add_argument('--out')
     return parser.parse_args()
 
@@ -168,7 +169,8 @@ def main():
         cache_radar_temporal=args.cache_radar_temporal,
         cache_bev_value_projections=args.cache_bev_value_projections,
         skip_cached_bev_value_preparation=(
-            args.skip_cached_bev_value_preparation))
+            args.skip_cached_bev_value_preparation),
+        cache_bev_depth_grids=args.cache_bev_depth_grids)
     prediction = runner.infer(runner.prepare(batch))
 
     print('boxes_3d shape: {}'.format(prediction.boxes_3d.shape))
