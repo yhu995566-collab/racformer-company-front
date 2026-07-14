@@ -166,6 +166,8 @@ def install_patches(model, recorder):
     transformer = head.transformer
     decoder = transformer.decoder
     layer = decoder.decoder_layer
+    radar_sampling = layer.sampling_radar_bev
+    lss_sampling = layer.sampling_lss_bev
 
     patches.wrap(model, 'extract_feat', 'extract_feat total')
     patches.wrap(model, 'extract_img_feat', 'image feature extraction')
@@ -194,11 +196,55 @@ def install_patches(model, recorder):
     patches.wrap(
         layer.sampling, 'forward', 'decoder camera sampling')
     patches.wrap(
-        layer.sampling_radar_bev, 'forward',
+        radar_sampling, 'forward',
         'decoder radar-BEV sampling')
     patches.wrap(
-        layer.sampling_lss_bev, 'forward',
+        lss_sampling, 'forward',
         'decoder LSS-BEV sampling')
+
+    patches.wrap(
+        radar_sampling.temporal_encoder, 'forward',
+        'radar-BEV temporal encoder')
+    patches.wrap(
+        radar_sampling.temporal_encoder.downsample, 'forward',
+        'radar temporal downsample')
+    patches.wrap(
+        radar_sampling.temporal_encoder.convGRU, 'forward',
+        'radar temporal ConvGRU')
+    patches.wrap(
+        radar_sampling.temporal_encoder.upsample, 'forward',
+        'radar temporal upsample')
+    patches.wrap(
+        radar_sampling.temporal_encoder.temporal_fusion, 'forward',
+        'radar temporal fusion')
+
+    for sampling, prefix in (
+            (radar_sampling, 'radar-BEV'),
+            (lss_sampling, 'LSS-BEV')):
+        patches.wrap(
+            sampling.ray_points_offset, 'forward',
+            '{} ray offset linear'.format(prefix))
+        patches.wrap(
+            sampling.sampling_offset, 'forward',
+            '{} sampling offset linear'.format(prefix))
+        patches.wrap(
+            sampling.scale_weights, 'forward',
+            '{} scale weight linear'.format(prefix))
+        patches.wrap(
+            sampling.positional_encoding, 'forward',
+            '{} positional encoding'.format(prefix))
+        patches.wrap(
+            sampling.attention, 'forward',
+            '{} deformable attention total'.format(prefix))
+        patches.wrap(
+            sampling.attention.value_proj, 'forward',
+            '{} attention value projection'.format(prefix))
+        patches.wrap(
+            sampling.attention.bev_queue_weight, 'forward',
+            '{} attention queue weight'.format(prefix))
+        patches.wrap(
+            sampling.attention.output_proj, 'forward',
+            '{} attention output projection'.format(prefix))
     patches.wrap(layer.mixing, 'forward', 'decoder adaptive mixing')
     patches.wrap(layer.ffn, 'forward', 'decoder FFN')
     patches.wrap(head, 'get_bboxes', 'get_bboxes / decode')
@@ -303,6 +349,82 @@ def print_breakdown(recorder, full_times, instrumented_times,
     print_stats('bbox coder decode', values(recorder, 'bbox coder decode'))
     print_indexed(
         recorder, 'decoder layer', num_decoder_layers, 'decoder layer')
+
+    print('\n=== Radar-BEV sampling nested breakdown ===')
+    radar_sampling = values(recorder, 'decoder radar-BEV sampling')
+    radar_sampling_components = [
+        values(recorder, 'radar-BEV temporal encoder'),
+        values(recorder, 'radar-BEV ray offset linear'),
+        values(recorder, 'radar-BEV sampling offset linear'),
+        values(recorder, 'radar-BEV scale weight linear'),
+        values(recorder, 'radar-BEV positional encoding'),
+        values(recorder, 'radar-BEV deformable attention total'),
+    ]
+    labels = (
+        'temporal encoder',
+        'ray offset linear',
+        'sampling offset linear',
+        'scale weight linear',
+        'positional encoding',
+        'deformable attention total',
+    )
+    for label, component in zip(labels, radar_sampling_components):
+        print_stats(label, component)
+    print_stats(
+        'sampling coordinate / tensor operations residual',
+        residual(radar_sampling, radar_sampling_components))
+
+    temporal = radar_sampling_components[0]
+    temporal_components = [
+        values(recorder, 'radar temporal downsample'),
+        values(recorder, 'radar temporal ConvGRU'),
+        values(recorder, 'radar temporal upsample'),
+        values(recorder, 'radar temporal fusion'),
+    ]
+    print('\nRadar temporal encoder nested breakdown:')
+    for label, component in zip(
+            ('downsample', 'ConvGRU', 'upsample', 'temporal fusion'),
+            temporal_components):
+        print_stats(label, component)
+    print_stats(
+        'temporal encoder residual', residual(temporal, temporal_components))
+
+    print('\nRadar deformable attention nested breakdown:')
+    print_attention_breakdown(recorder, 'radar-BEV')
+
+    print('\n=== LSS-BEV sampling nested breakdown ===')
+    lss_sampling = values(recorder, 'decoder LSS-BEV sampling')
+    lss_sampling_components = [
+        values(recorder, 'LSS-BEV ray offset linear'),
+        values(recorder, 'LSS-BEV sampling offset linear'),
+        values(recorder, 'LSS-BEV scale weight linear'),
+        values(recorder, 'LSS-BEV positional encoding'),
+        values(recorder, 'LSS-BEV deformable attention total'),
+    ]
+    for label, component in zip(labels[1:], lss_sampling_components):
+        print_stats(label, component)
+    print_stats(
+        'sampling coordinate / tensor operations residual',
+        residual(lss_sampling, lss_sampling_components))
+    print('\nLSS deformable attention nested breakdown:')
+    print_attention_breakdown(recorder, 'LSS-BEV')
+
+
+def print_attention_breakdown(recorder, prefix):
+    attention = values(
+        recorder, '{} deformable attention total'.format(prefix))
+    components = [
+        values(recorder, '{} attention value projection'.format(prefix)),
+        values(recorder, '{} attention queue weight'.format(prefix)),
+        values(recorder, '{} attention output projection'.format(prefix)),
+    ]
+    for label, component in zip(
+            ('value projection', 'queue weight', 'output projection'),
+            components):
+        print_stats(label, component)
+    print_stats(
+        'CUDA deformable attention / tensor operations residual',
+        residual(attention, components))
 
 
 def profile(args):
