@@ -46,11 +46,38 @@ class _PerForwardRadarTemporalCache:
         return self.cached_output
 
 
+class _PerForwardModuleOutputCache:
+    """Cache one module output until the enclosing model forward ends."""
+
+    def __init__(self, module):
+        self.module = module
+        self.original_forward = module.forward
+        self.active = False
+        self.cached_output = None
+        module.forward = self.forward
+
+    def begin(self):
+        self.active = True
+        self.cached_output = None
+
+    def end(self):
+        self.active = False
+        self.cached_output = None
+
+    def forward(self, *args, **kwargs):
+        if not self.active:
+            return self.original_forward(*args, **kwargs)
+        if self.cached_output is None:
+            self.cached_output = self.original_forward(*args, **kwargs)
+        return self.cached_output
+
+
 class RaCFormerPyTorchRunner:
     """Load the training model unchanged and execute deployment batches."""
 
     def __init__(self, config, weights, device='cuda:0',
-                 cache_radar_temporal=False):
+                 cache_radar_temporal=False,
+                 cache_bev_value_projections=False):
         if not torch.cuda.is_available():
             raise RuntimeError('RaCFormer deployment requires a CUDA device')
         self.device = torch.device(device)
@@ -70,10 +97,18 @@ class RaCFormerPyTorchRunner:
         if 'version' in checkpoint:
             from models.utils import VERSION
             VERSION.name = checkpoint['version']
-        self.radar_temporal_cache = None
+        self.forward_caches = []
         if cache_radar_temporal:
-            self.radar_temporal_cache = _PerForwardRadarTemporalCache(
-                self.model)
+            self.forward_caches.append(
+                _PerForwardRadarTemporalCache(self.model))
+        if cache_bev_value_projections:
+            layer = self.model.pts_bbox_head.transformer.decoder.decoder_layer
+            self.forward_caches.extend([
+                _PerForwardModuleOutputCache(
+                    layer.sampling_radar_bev.attention.value_proj),
+                _PerForwardModuleOutputCache(
+                    layer.sampling_lss_bev.attention.value_proj),
+            ])
 
     def prepare(self, batch, non_blocking=False):
         if not isinstance(batch, PreparedBatch):
@@ -94,14 +129,14 @@ class RaCFormerPyTorchRunner:
             radar_rcs=[batch.radar_rcs])
 
     def infer_raw(self, batch):
-        if self.radar_temporal_cache is not None:
-            self.radar_temporal_cache.begin()
+        for cache in self.forward_caches:
+            cache.begin()
         try:
             with torch.no_grad():
                 return self.model(**self._model_kwargs(batch))
         finally:
-            if self.radar_temporal_cache is not None:
-                self.radar_temporal_cache.end()
+            for cache in reversed(self.forward_caches):
+                cache.end()
 
     def infer(self, batch):
         return parse_detection_result(self.infer_raw(batch))
