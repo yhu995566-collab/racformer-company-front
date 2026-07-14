@@ -4,8 +4,10 @@ import copy
 import importlib
 
 import torch
+import torch.backends.cudnn as cudnn
 from mmcv import Config
 from mmcv.runner import load_checkpoint
+from mmdet.apis import set_random_seed
 from mmdet3d.models import build_model
 
 from .input_schema import PreparedBatch
@@ -20,6 +22,8 @@ class RaCFormerPyTorchRunner:
             raise RuntimeError('RaCFormer deployment requires a CUDA device')
         self.device = torch.device(device)
         torch.cuda.set_device(self.device)
+        set_random_seed(0, deterministic=True)
+        cudnn.benchmark = True
         self.cfg = Config.fromfile(config)
 
         importlib.import_module('models')

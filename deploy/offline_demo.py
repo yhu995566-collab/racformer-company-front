@@ -100,6 +100,14 @@ def compare_reference(prediction, reference_path, sample_index):
             rtol=1e-4, atol=1e-4)
     labels_equal = np.array_equal(
         prediction.labels_3d, reference.labels_3d)
+    if same_shape:
+        box_error = np.abs(prediction.boxes_3d - reference.boxes_3d)
+        print('boxes max abs error: {:.8f}'.format(box_error.max()))
+        print('boxes mean abs error: {:.8f}'.format(box_error.mean()))
+    if prediction.scores_3d.shape == reference.scores_3d.shape:
+        score_error = np.abs(prediction.scores_3d - reference.scores_3d)
+        print('scores max abs error: {:.8f}'.format(score_error.max()))
+        print('scores mean abs error: {:.8f}'.format(score_error.mean()))
     print('reference boxes close: {}'.format(boxes_close))
     print('reference scores close: {}'.format(scores_close))
     print('reference labels equal: {}'.format(labels_equal))
@@ -132,8 +140,6 @@ def main():
     print('labels_3d shape: {}'.format(prediction.labels_3d.shape))
     print('detection count: {}'.format(prediction.count))
 
-    if args.reference_pkl:
-        compare_reference(prediction, args.reference_pkl, args.sample_index)
     if args.out:
         output_path = os.path.abspath(args.out)
         mmcv.mkdir_or_exist(os.path.dirname(output_path))
@@ -143,6 +149,8 @@ def main():
             scores_3d=prediction.scores_3d,
             labels_3d=prediction.labels_3d)
         print('prediction saved to {}'.format(output_path))
+    if args.reference_pkl:
+        compare_reference(prediction, args.reference_pkl, args.sample_index)
 
 
 if __name__ == '__main__':
