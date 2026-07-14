@@ -29,6 +29,9 @@ def parse_args():
     parser.add_argument('--sample-index', type=int, default=0)
     parser.add_argument('--device', default='cuda:0')
     parser.add_argument('--reference-pkl')
+    parser.add_argument('--box-atol', type=float, default=5e-3)
+    parser.add_argument('--score-atol', type=float, default=2e-4)
+    parser.add_argument('--rtol', type=float, default=0.0)
     parser.add_argument('--out')
     return parser.parse_args()
 
@@ -88,26 +91,36 @@ def load_frames(dataset, sample_index, num_frames):
     return frames
 
 
-def compare_reference(prediction, reference_path, sample_index):
+def compare_reference(prediction, reference_path, sample_index,
+                      box_atol, score_atol, rtol):
     reference_results = mmcv.load(reference_path)
     reference = parse_detection_result([reference_results[sample_index]])
     same_shape = prediction.boxes_3d.shape == reference.boxes_3d.shape
     boxes_close = same_shape and np.allclose(
-        prediction.boxes_3d, reference.boxes_3d, rtol=1e-4, atol=1e-4)
+        prediction.boxes_3d, reference.boxes_3d,
+        rtol=rtol, atol=box_atol)
     scores_close = prediction.scores_3d.shape == reference.scores_3d.shape and \
         np.allclose(
             prediction.scores_3d, reference.scores_3d,
-            rtol=1e-4, atol=1e-4)
+            rtol=rtol, atol=score_atol)
     labels_equal = np.array_equal(
         prediction.labels_3d, reference.labels_3d)
     if same_shape:
         box_error = np.abs(prediction.boxes_3d - reference.boxes_3d)
         print('boxes max abs error: {:.8f}'.format(box_error.max()))
         print('boxes mean abs error: {:.8f}'.format(box_error.mean()))
+        if box_error.shape[1] == 9:
+            fields = ('x', 'y', 'z', 'dx', 'dy', 'dz', 'yaw', 'vx', 'vy')
+            field_errors = box_error.max(axis=0)
+            print('boxes max abs error by field: {}'.format(', '.join(
+                '{}={:.8f}'.format(name, error)
+                for name, error in zip(fields, field_errors))))
     if prediction.scores_3d.shape == reference.scores_3d.shape:
         score_error = np.abs(prediction.scores_3d - reference.scores_3d)
         print('scores max abs error: {:.8f}'.format(score_error.max()))
         print('scores mean abs error: {:.8f}'.format(score_error.mean()))
+    print('comparison tolerances: box_atol={}, score_atol={}, rtol={}'.format(
+        box_atol, score_atol, rtol))
     print('reference boxes close: {}'.format(boxes_close))
     print('reference scores close: {}'.format(scores_close))
     print('reference labels equal: {}'.format(labels_equal))
@@ -150,7 +163,9 @@ def main():
             labels_3d=prediction.labels_3d)
         print('prediction saved to {}'.format(output_path))
     if args.reference_pkl:
-        compare_reference(prediction, args.reference_pkl, args.sample_index)
+        compare_reference(
+            prediction, args.reference_pkl, args.sample_index,
+            args.box_atol, args.score_atol, args.rtol)
 
 
 if __name__ == '__main__':

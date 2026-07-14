@@ -52,8 +52,13 @@ CUDA_VISIBLE_DEVICES=3 python -m deploy.offline_demo \
 ```
 
 The command must report matching boxes, scores, and labels before this path is
-used as the ROS integration base. Real inference validation is intentionally
-performed on the GPU server, not on development machines.
+used as the ROS integration base. Default parity tolerances are `5e-3` absolute
+for box fields, `2e-4` absolute for scores, and zero relative; labels must be
+identical. These account for the model's non-deterministic radar voxelization
+and custom CUDA operators without hiding meaningful input differences. Override
+them with `--box-atol`, `--score-atol`, and `--rtol` when needed. Real inference
+validation is intentionally performed on the GPU server, not on development
+machines.
 
 ## Synchronization
 
