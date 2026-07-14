@@ -41,6 +41,7 @@ class EventRecorder:
 
     def __init__(self):
         self.active = False
+        self.context = None
         self.current = []
         self.totals = {}
         self.calls = {}
@@ -48,6 +49,7 @@ class EventRecorder:
 
     def begin(self):
         self.current = []
+        self.context = None
         self.active = True
 
     def add(self, label, start_event, end_event):
@@ -75,7 +77,7 @@ class MethodPatches:
         self.originals = []
         self.keys = set()
 
-    def wrap(self, obj, attribute, label):
+    def wrap(self, obj, attribute, label, context=None):
         key = (id(obj), attribute)
         if key in self.keys:
             return
@@ -87,6 +89,35 @@ class MethodPatches:
         def measured(*args, **kwargs):
             if not recorder.active:
                 return original(*args, **kwargs)
+            previous_context = recorder.context
+            if context is not None:
+                recorder.context = context
+            start_event = torch.cuda.Event(enable_timing=True)
+            end_event = torch.cuda.Event(enable_timing=True)
+            start_event.record()
+            try:
+                return original(*args, **kwargs)
+            finally:
+                end_event.record()
+                recorder.add(label, start_event, end_event)
+                recorder.context = previous_context
+
+        self.originals.append((obj, attribute, original))
+        setattr(obj, attribute, measured)
+
+    def wrap_contextual(self, obj, attribute, label_suffix):
+        key = (id(obj), attribute)
+        if key in self.keys:
+            return
+        self.keys.add(key)
+        original = getattr(obj, attribute)
+        recorder = self.recorder
+
+        @functools.wraps(original)
+        def measured(*args, **kwargs):
+            if not recorder.active or recorder.context is None:
+                return original(*args, **kwargs)
+            label = '{} {}'.format(recorder.context, label_suffix)
             start_event = torch.cuda.Event(enable_timing=True)
             end_event = torch.cuda.Event(enable_timing=True)
             start_event.record()
@@ -162,6 +193,46 @@ def values(recorder, label):
     return recorder.totals.get(label, [])
 
 
+def sum_indexed_calls(recorder, label, indices):
+    series = []
+    for index in indices:
+        key = '{} [{}]'.format(label, index)
+        if key not in recorder.indexed_calls:
+            return []
+        series.append(recorder.indexed_calls[key])
+    return [sum(items) for items in zip(*series)]
+
+
+def print_coordinate_breakdown(recorder, prefix, coordinate_total,
+                               num_decoder_layers):
+    theta_label = '{} theta-to-xy'.format(prefix)
+    initial_theta = sum_indexed_calls(
+        recorder, theta_label, range(0, num_decoder_layers * 2, 2))
+    final_theta = sum_indexed_calls(
+        recorder, theta_label, range(1, num_decoder_layers * 2, 2))
+    make_points = values(recorder, '{} make-sample-points'.format(prefix))
+    xy_to_theta = values(recorder, '{} xy-to-theta'.format(prefix))
+    print_stats('query theta-to-xy', initial_theta)
+    print_stats('make_sample_points total', make_points)
+    print_stats('xy-to-theta after velocity warp', xy_to_theta)
+    print_stats('final theta-to-xy', final_theta)
+    helper_totals = [initial_theta, make_points, xy_to_theta, final_theta]
+    print_stats(
+        'velocity/depth/layout/scale preparation residual',
+        residual(coordinate_total, helper_totals))
+
+    bbox_decode = values(
+        recorder, '{} sample-point bbox decode'.format(prefix))
+    offset_rotation = values(
+        recorder, '{} sample-point offset rotation'.format(prefix))
+    print('\nmake_sample_points nested breakdown:')
+    print_stats('bbox decode', bbox_decode)
+    print_stats('offset rotation', offset_rotation)
+    print_stats(
+        'box scaling / point translation residual',
+        residual(make_points, [bbox_decode, offset_rotation]))
+
+
 def install_patches(model, recorder):
     patches = MethodPatches(recorder)
     view = model.img_lss_view_transformer
@@ -171,6 +242,9 @@ def install_patches(model, recorder):
     layer = decoder.decoder_layer
     radar_sampling = layer.sampling_radar_bev
     lss_sampling = layer.sampling_lss_bev
+    transformer_module = importlib.import_module(
+        'models.racformer_transformer')
+    sampling_module = importlib.import_module('models.sparsebev_sampling')
 
     patches.wrap(model, 'extract_feat', 'extract_feat total')
     patches.wrap(model, 'extract_img_feat', 'image feature extraction')
@@ -200,10 +274,22 @@ def install_patches(model, recorder):
         layer.sampling, 'forward', 'decoder camera sampling')
     patches.wrap(
         radar_sampling, 'forward',
-        'decoder radar-BEV sampling')
+        'decoder radar-BEV sampling', context='radar-BEV')
     patches.wrap(
         lss_sampling, 'forward',
-        'decoder LSS-BEV sampling')
+        'decoder LSS-BEV sampling', context='LSS-BEV')
+
+    patches.wrap_contextual(
+        transformer_module, 'theta_d2xy_coods', 'theta-to-xy')
+    patches.wrap_contextual(
+        transformer_module, 'xy2theta_d_coods', 'xy-to-theta')
+    patches.wrap_contextual(
+        transformer_module, 'make_sample_points', 'make-sample-points')
+    patches.wrap_contextual(
+        sampling_module, 'decode_bbox', 'sample-point bbox decode')
+    patches.wrap_contextual(
+        sampling_module, 'rotation_3d_in_axis',
+        'sample-point offset rotation')
 
     patches.wrap(
         radar_sampling.temporal_encoder, 'forward',
@@ -373,9 +459,9 @@ def print_breakdown(recorder, full_times, instrumented_times,
     )
     for label, component in zip(labels, radar_sampling_components):
         print_stats(label, component)
+    radar_coordinate = residual(radar_sampling, radar_sampling_components)
     print_stats(
-        'sampling coordinate / tensor operations residual',
-        residual(radar_sampling, radar_sampling_components))
+        'sampling coordinate / tensor operations residual', radar_coordinate)
 
     temporal = radar_sampling_components[0]
     temporal_components = [
@@ -394,6 +480,9 @@ def print_breakdown(recorder, full_times, instrumented_times,
 
     print('\nRadar deformable attention nested breakdown:')
     print_attention_breakdown(recorder, 'radar-BEV')
+    print('\nRadar sampling coordinate breakdown:')
+    print_coordinate_breakdown(
+        recorder, 'radar-BEV', radar_coordinate, num_decoder_layers)
 
     print('\n=== LSS-BEV sampling nested breakdown ===')
     lss_sampling = values(recorder, 'decoder LSS-BEV sampling')
@@ -406,11 +495,14 @@ def print_breakdown(recorder, full_times, instrumented_times,
     ]
     for label, component in zip(labels[1:], lss_sampling_components):
         print_stats(label, component)
+    lss_coordinate = residual(lss_sampling, lss_sampling_components)
     print_stats(
-        'sampling coordinate / tensor operations residual',
-        residual(lss_sampling, lss_sampling_components))
+        'sampling coordinate / tensor operations residual', lss_coordinate)
     print('\nLSS deformable attention nested breakdown:')
     print_attention_breakdown(recorder, 'LSS-BEV')
+    print('\nLSS sampling coordinate breakdown:')
+    print_coordinate_breakdown(
+        recorder, 'LSS-BEV', lss_coordinate, num_decoder_layers)
 
 
 def print_attention_breakdown(recorder, prefix):
