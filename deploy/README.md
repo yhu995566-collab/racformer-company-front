@@ -106,6 +106,28 @@ The report separates three latency definitions:
   preprocessing, transfer, model forward, and output transfer/parsing.
 - Mode C reuses a prepared GPU batch and measures the model-only floor.
 
+## Forward Submodule Profiling
+
+Use the same approved-GPU procedure, then split the prepared-batch forward:
+
+```bash
+python -m deploy.profile_forward \
+  --config configs/deploy/racformer_company_front_left_pytorch.py \
+  --weights /mnt/diskNvme1/hyh/results/RaCFormer/racformer_company_front_velocity_v2/2026-07-07/18-46-40/epoch_36.pth \
+  --device cuda:0 \
+  --split val \
+  --sample-index 0 \
+  --warmup 10 \
+  --iters 50 \
+  --out outputs/deploy_baseline/forward_profile.txt
+```
+
+The script first records an uninstrumented model baseline. It then temporarily
+wraps existing methods with CUDA events to break down image features, eight
+radar/LSS frames, the six shared decoder-layer calls, attention/sampling/mixing,
+and bbox decode. It restores every wrapped method before exiting and does not
+modify model source or checkpoint semantics.
+
 ## Synchronization
 
 Deployment code lives in the same Git repository as training code. Update a
