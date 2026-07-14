@@ -45,6 +45,7 @@ def parse_args():
     parser.add_argument('--device', default='cuda:0')
     parser.add_argument('--warmup', type=int, default=10)
     parser.add_argument('--iters', type=int, default=50)
+    parser.add_argument('--cache-radar-temporal', action='store_true')
     parser.add_argument(
         '--out', default='outputs/deploy_baseline/deploy_profile.txt')
     args = parser.parse_args()
@@ -130,7 +131,8 @@ def profile(args):
 
     preprocessor = DeploymentPreprocessor(cfg)
     runner = RaCFormerPyTorchRunner(
-        args.config, args.weights, device=args.device)
+        args.config, args.weights, device=args.device,
+        cache_radar_temporal=args.cache_radar_temporal)
     start_event = torch.cuda.Event(enable_timing=True)
     end_event = torch.cuda.Event(enable_timing=True)
 
@@ -142,6 +144,8 @@ def profile(args):
     print('sample index: {}'.format(args.sample_index))
     print('warmup iterations: {}'.format(args.warmup))
     print('profile iterations per mode: {}'.format(args.iters))
+    print('radar temporal cache: {}'.format(
+        'enabled' if args.cache_radar_temporal else 'disabled'))
     print('model forward includes get_bboxes() and bbox3d2result() decode')
 
     cached_frames = load_frames(

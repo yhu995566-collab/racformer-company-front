@@ -14,10 +14,43 @@ from .input_schema import PreparedBatch
 from .postprocessing import parse_detection_result
 
 
+class _PerForwardRadarTemporalCache:
+    """Reuse query-independent radar temporal features within one forward."""
+
+    def __init__(self, model):
+        self.encoder = model.pts_bbox_head.transformer.decoder.decoder_layer \
+            .sampling_radar_bev.temporal_encoder
+        self.original_forward = self.encoder.forward
+        self.active = False
+        self.cached_key = None
+        self.cached_output = None
+        self.encoder.forward = self.forward
+
+    def begin(self):
+        self.active = True
+        self.cached_key = None
+        self.cached_output = None
+
+    def end(self):
+        self.active = False
+        self.cached_key = None
+        self.cached_output = None
+
+    def forward(self, bev_feats):
+        if not self.active:
+            return self.original_forward(bev_feats)
+        key = (bev_feats.data_ptr(), bev_feats._version, tuple(bev_feats.shape))
+        if key != self.cached_key:
+            self.cached_output = self.original_forward(bev_feats)
+            self.cached_key = key
+        return self.cached_output
+
+
 class RaCFormerPyTorchRunner:
     """Load the training model unchanged and execute deployment batches."""
 
-    def __init__(self, config, weights, device='cuda:0'):
+    def __init__(self, config, weights, device='cuda:0',
+                 cache_radar_temporal=False):
         if not torch.cuda.is_available():
             raise RuntimeError('RaCFormer deployment requires a CUDA device')
         self.device = torch.device(device)
@@ -37,6 +70,10 @@ class RaCFormerPyTorchRunner:
         if 'version' in checkpoint:
             from models.utils import VERSION
             VERSION.name = checkpoint['version']
+        self.radar_temporal_cache = None
+        if cache_radar_temporal:
+            self.radar_temporal_cache = _PerForwardRadarTemporalCache(
+                self.model)
 
     def prepare(self, batch, non_blocking=False):
         if not isinstance(batch, PreparedBatch):
@@ -57,8 +94,14 @@ class RaCFormerPyTorchRunner:
             radar_rcs=[batch.radar_rcs])
 
     def infer_raw(self, batch):
-        with torch.no_grad():
-            return self.model(**self._model_kwargs(batch))
+        if self.radar_temporal_cache is not None:
+            self.radar_temporal_cache.begin()
+        try:
+            with torch.no_grad():
+                return self.model(**self._model_kwargs(batch))
+        finally:
+            if self.radar_temporal_cache is not None:
+                self.radar_temporal_cache.end()
 
     def infer(self, batch):
         return parse_detection_result(self.infer_raw(batch))
