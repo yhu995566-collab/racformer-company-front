@@ -335,20 +335,26 @@ def profile(args):
     print('sample index: {}'.format(args.sample_index))
     print('warmup iterations: {}'.format(args.warmup))
     print('profile iterations: {}'.format(args.iters))
+    print('execution context: runner.infer_raw() with torch.no_grad()')
 
     for _ in range(args.warmup):
         runner.infer_raw(batch)
     torch.cuda.synchronize()
+    torch.cuda.empty_cache()
+    torch.cuda.reset_peak_memory_stats()
 
     full_times = []
     result = None
-    with torch.inference_mode():
-        for _ in range(args.iters):
-            start_event.record()
-            result = runner.infer_raw(batch)
-            end_event.record()
-            torch.cuda.synchronize()
-            full_times.append(start_event.elapsed_time(end_event))
+    for _ in range(args.iters):
+        start_event.record()
+        result = runner.infer_raw(batch)
+        end_event.record()
+        torch.cuda.synchronize()
+        full_times.append(start_event.elapsed_time(end_event))
+    baseline_allocated_mb = (
+        torch.cuda.max_memory_allocated() / (1024.0 ** 2))
+    baseline_reserved_mb = (
+        torch.cuda.max_memory_reserved() / (1024.0 ** 2))
 
     recorder = EventRecorder()
     patches = install_patches(runner.model, recorder)
@@ -357,17 +363,18 @@ def profile(args):
         for _ in range(args.warmup):
             runner.infer_raw(batch)
         torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
 
-        with torch.inference_mode():
-            for _ in range(args.iters):
-                recorder.begin()
-                start_event.record()
-                result = runner.infer_raw(batch)
-                end_event.record()
-                torch.cuda.synchronize()
-                instrumented_times.append(
-                    start_event.elapsed_time(end_event))
-                recorder.finish()
+        for _ in range(args.iters):
+            recorder.begin()
+            start_event.record()
+            result = runner.infer_raw(batch)
+            end_event.record()
+            torch.cuda.synchronize()
+            instrumented_times.append(
+                start_event.elapsed_time(end_event))
+            recorder.finish()
     finally:
         patches.restore()
 
@@ -375,11 +382,20 @@ def profile(args):
         recorder, full_times, instrumented_times,
         num_frames=batch.image.shape[1],
         num_decoder_layers=runner.model.pts_bbox_head.transformer.decoder.num_layers)
-    allocated_mb = torch.cuda.max_memory_allocated() / (1024.0 ** 2)
-    reserved_mb = torch.cuda.max_memory_reserved() / (1024.0 ** 2)
+    instrumented_allocated_mb = (
+        torch.cuda.max_memory_allocated() / (1024.0 ** 2))
+    instrumented_reserved_mb = (
+        torch.cuda.max_memory_reserved() / (1024.0 ** 2))
     print('\n=== Memory and output ===')
-    print('max_memory_allocated: {:.2f} MB'.format(allocated_mb))
-    print('max_memory_reserved: {:.2f} MB'.format(reserved_mb))
+    print('Memory peaks exclude model/checkpoint loading and warmup.')
+    print('baseline max_memory_allocated: {:.2f} MB'.format(
+        baseline_allocated_mb))
+    print('baseline max_memory_reserved: {:.2f} MB'.format(
+        baseline_reserved_mb))
+    print('instrumented max_memory_allocated: {:.2f} MB'.format(
+        instrumented_allocated_mb))
+    print('instrumented max_memory_reserved: {:.2f} MB'.format(
+        instrumented_reserved_mb))
     prediction = parse_detection_result(result)
     print('boxes_3d shape: {}'.format(prediction.boxes_3d.shape))
     print('scores_3d shape: {}'.format(prediction.scores_3d.shape))
