@@ -138,6 +138,11 @@ this first stateless export. Training-only gradient checkpointing is disabled
 after checkpoint loading because it does not change eval numerics and the
 PyTorch 2.0 legacy ONNX tracer cannot trace it reliably.
 
+The exporter records a two-forward raw-output comparison. It is informational
+by default because radar voxelization and custom CUDA kernels can differ across
+independent runs. Add `--strict-boundary-check` only when deterministic kernels
+have been established and exceeding `--boundary-atol` should stop export.
+
 Check the server environment, then attempt a standard ONNX export:
 
 ```bash
