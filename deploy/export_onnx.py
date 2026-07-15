@@ -82,6 +82,37 @@ def disable_gradient_checkpointing(model):
     return disabled
 
 
+def install_cat_export_diagnostic(opset):
+    """Replace an opaque PyTorch 2.0 cat assertion with node diagnostics."""
+    from torch.onnx import register_custom_op_symbolic
+    from torch.onnx import symbolic_helper, symbolic_opset9
+
+    def node_detail(node, method_name):
+        try:
+            return getattr(node, method_name)()
+        except Exception as error:
+            return '<unavailable: {}>'.format(error)
+
+    def diagnostic_cat(g, tensor_list, dim):
+        tensors = symbolic_helper._unpack_list(tensor_list)
+        nonempty = [
+            tensor for tensor in tensors
+            if not symbolic_helper._is_none(tensor)
+        ]
+        if not nonempty:
+            list_node = tensor_list.node()
+            details = [
+                'ONNX export found aten::cat with no tensor inputs',
+                'list node: {}'.format(list_node),
+                'scope: {}'.format(node_detail(list_node, 'scopeName')),
+                'source: {}'.format(node_detail(list_node, 'sourceRange')),
+            ]
+            raise RuntimeError('\n'.join(details))
+        return symbolic_opset9.cat(g, tensor_list, dim)
+
+    register_custom_op_symbolic('aten::cat', diagnostic_cat, int(opset))
+
+
 def main():
     args = parse_args()
     report = [
@@ -167,6 +198,7 @@ def main():
             'radar_points_{}'.format(index): {0: 'radar_points_{}_count'.format(index)}
             for index in range(8)
         }
+        install_cat_export_diagnostic(args.opset)
         torch.onnx.export(
             wrapper,
             inputs,
