@@ -642,14 +642,26 @@ class AdaptiveMixing(nn.Module):
 
         '''adaptive channel mixing'''
         out = torch.matmul(out, M)
-        out = F.layer_norm(
-            out, (self.in_points, self.eff_out_dim))
+        channel_norm_shape = (self.in_points, self.eff_out_dim)
+        if torch.onnx.is_in_onnx_export():
+            norm_weight = out.new_ones(channel_norm_shape)
+            norm_bias = out.new_zeros(channel_norm_shape)
+            out = F.layer_norm(
+                out, channel_norm_shape, norm_weight, norm_bias)
+        else:
+            out = F.layer_norm(out, channel_norm_shape)
         out = self.act(out)
 
         '''adaptive point mixing'''
         out = torch.matmul(S, out)  # implicitly transpose and matmul
-        out = F.layer_norm(
-            out, (self.out_points, self.eff_out_dim))
+        point_norm_shape = (self.out_points, self.eff_out_dim)
+        if torch.onnx.is_in_onnx_export():
+            norm_weight = out.new_ones(point_norm_shape)
+            norm_bias = out.new_zeros(point_norm_shape)
+            out = F.layer_norm(
+                out, point_norm_shape, norm_weight, norm_bias)
+        else:
+            out = F.layer_norm(out, point_norm_shape)
         out = self.act(out)
 
         '''linear transfomation to query dim'''
