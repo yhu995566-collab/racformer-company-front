@@ -82,8 +82,8 @@ def disable_gradient_checkpointing(model):
     return disabled
 
 
-def install_cat_export_diagnostic(opset):
-    """Replace an opaque PyTorch 2.0 cat assertion with node diagnostics."""
+def install_export_symbolics(opset):
+    """Install compatibility symbolics missing from the PyTorch 2.0 exporter."""
     from torch.onnx import register_custom_op_symbolic
     from torch.onnx import symbolic_helper
 
@@ -113,7 +113,27 @@ def install_cat_export_diagnostic(opset):
         axis = symbolic_helper._get_const(dim, 'i', 'dim')
         return g.op('Concat', *nonempty, axis_i=axis)
 
+    def atan2(g, y, x):
+        zero = g.op('Constant', value_t=torch.tensor(0.0, dtype=torch.float32))
+        pi = g.op(
+            'Constant', value_t=torch.tensor(
+                3.141592653589793, dtype=torch.float32))
+        half_pi = g.op(
+            'Constant', value_t=torch.tensor(
+                1.5707963267948966, dtype=torch.float32))
+        angle = g.op('Atan', g.op('Div', y, x))
+        negative_x_offset = g.op(
+            'Where', g.op('GreaterOrEqual', y, zero), pi, g.op('Neg', pi))
+        angle = g.op(
+            'Where', g.op('Less', x, zero),
+            g.op('Add', angle, negative_x_offset), angle)
+        vertical = g.op(
+            'Where', g.op('Greater', y, zero), half_pi,
+            g.op('Where', g.op('Less', y, zero), g.op('Neg', half_pi), zero))
+        return g.op('Where', g.op('Equal', x, zero), vertical, angle)
+
     register_custom_op_symbolic('aten::cat', diagnostic_cat, int(opset))
+    register_custom_op_symbolic('aten::atan2', atan2, int(opset))
 
 
 def main():
@@ -201,7 +221,7 @@ def main():
             'radar_points_{}'.format(index): {0: 'radar_points_{}_count'.format(index)}
             for index in range(8)
         }
-        install_cat_export_diagnostic(args.opset)
+        install_export_symbolics(args.opset)
         torch.onnx.export(
             wrapper,
             inputs,

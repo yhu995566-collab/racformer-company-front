@@ -15,5 +15,9 @@ The LSS view transformer exports BEV pooling as the custom ONNX node
 `mmdeploy::bev_pool_v2`. Its existing CUDA forward preserves PyTorch export
 parity, but TensorRT will require a compatible plugin implementation.
 
+PyTorch 2.0 does not export `aten::atan2` at opset 17. The deployment exporter
+lowers it to standard ONNX `Atan`, comparison, and `Where` nodes while retaining
+the full quadrant behavior needed by box and polar-coordinate transforms.
+
 Do not commit `.onnx`, `.engine`, `.plan`, or profiling output. TensorRT engines
 must ultimately be rebuilt for the target Jetson software and GPU environment.
