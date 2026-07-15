@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+"""Run the TensorRT ONNX parser without building or benchmarking an engine."""
+
+import argparse
+import ctypes
+import os
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description='Parse RaCFormer ONNX with the installed TensorRT')
+    parser.add_argument('--onnx', required=True)
+    parser.add_argument('--out', required=True)
+    parser.add_argument(
+        '--plugin', action='append', default=[],
+        help='TensorRT plugin shared library to load before parsing')
+    return parser.parse_args()
+
+
+def write_report(path, lines):
+    path = os.path.abspath(path)
+    os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+    with open(path, 'w') as stream:
+        stream.write('\n'.join(lines) + '\n')
+    print('\n'.join(lines))
+    print('TensorRT parser report: {}'.format(path))
+
+
+def main():
+    args = parse_args()
+    lines = [
+        '=== RaCFormer TensorRT parser audit ===',
+        'onnx: {}'.format(os.path.abspath(args.onnx)),
+    ]
+    try:
+        import tensorrt as trt
+    except ImportError as error:
+        lines.extend([
+            'status: FAILED',
+            'TensorRT Python import failed: {}'.format(error),
+        ])
+        write_report(args.out, lines)
+        raise
+
+    lines.append('TensorRT version: {}'.format(trt.__version__))
+    for plugin_path in args.plugin:
+        plugin_path = os.path.abspath(plugin_path)
+        ctypes.CDLL(plugin_path, mode=ctypes.RTLD_GLOBAL)
+        lines.append('loaded plugin: {}'.format(plugin_path))
+
+    logger = trt.Logger(trt.Logger.WARNING)
+    trt.init_libnvinfer_plugins(logger, '')
+    builder = trt.Builder(logger)
+    explicit_batch = 1 << int(
+        trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)
+    network = builder.create_network(explicit_batch)
+    parser = trt.OnnxParser(network, logger)
+    parsed = parser.parse_from_file(os.path.abspath(args.onnx))
+
+    lines.extend([
+        'status: {}'.format('PASS' if parsed else 'FAILED'),
+        'parser errors: {}'.format(parser.num_errors),
+    ])
+    for index in range(parser.num_errors):
+        lines.append('error {}: {}'.format(index, parser.get_error(index)))
+
+    if parsed:
+        lines.extend([
+            'network inputs: {}'.format(network.num_inputs),
+            'network outputs: {}'.format(network.num_outputs),
+            'network layers: {}'.format(network.num_layers),
+            '', '=== TensorRT inputs ===',
+        ])
+        for index in range(network.num_inputs):
+            tensor = network.get_input(index)
+            lines.append('{}: {} {}'.format(
+                tensor.name, tuple(tensor.shape), tensor.dtype))
+        lines.extend(['', '=== TensorRT outputs ==='])
+        for index in range(network.num_outputs):
+            tensor = network.get_output(index)
+            lines.append('{}: {} {}'.format(
+                tensor.name, tuple(tensor.shape), tensor.dtype))
+
+    write_report(args.out, lines)
+    if not parsed:
+        raise RuntimeError('TensorRT could not parse the ONNX graph')
+
+
+if __name__ == '__main__':
+    main()

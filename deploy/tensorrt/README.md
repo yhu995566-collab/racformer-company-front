@@ -11,6 +11,19 @@ raw detector-head outputs. Variable-length bbox decode remains in Python.
 3. Only after the unsupported-op list is understood should plugins or graph
    rewrites be implemented and a TensorRT engine built.
 
+After the standard ONNX checker passes, audit the installed TensorRT parser
+without building an engine:
+
+```bash
+python -m deploy.tensorrt.parse_onnx \
+  --onnx outputs/deploy_onnx/racformer_raw_fp32.onnx \
+  --out outputs/deploy_onnx/tensorrt_parser.txt
+```
+
+Use `--plugin /absolute/path/plugin.so` for each TensorRT plugin library once
+plugins exist. The current PyTorch `bev_pool_v2_ext` is not a TensorRT plugin
+and must not be passed to this option.
+
 The LSS view transformer exports BEV pooling as the custom ONNX node
 `mmdeploy::bev_pool_v2`. Its existing CUDA forward preserves PyTorch export
 parity, but TensorRT will require a compatible plugin implementation.
