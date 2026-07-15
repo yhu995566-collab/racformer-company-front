@@ -85,7 +85,7 @@ def disable_gradient_checkpointing(model):
 def install_cat_export_diagnostic(opset):
     """Replace an opaque PyTorch 2.0 cat assertion with node diagnostics."""
     from torch.onnx import register_custom_op_symbolic
-    from torch.onnx import symbolic_helper, symbolic_opset9
+    from torch.onnx import symbolic_helper
 
     def node_detail(node, method_name):
         try:
@@ -108,7 +108,10 @@ def install_cat_export_diagnostic(opset):
                 'source: {}'.format(node_detail(list_node, 'sourceRange')),
             ]
             raise RuntimeError('\n'.join(details))
-        return symbolic_opset9.cat(g, tensor_list, dim)
+        if len(nonempty) == 1:
+            return nonempty[0]
+        axis = symbolic_helper._get_const(dim, 'i', 'dim')
+        return g.op('Concat', *nonempty, axis_i=axis)
 
     register_custom_op_symbolic('aten::cat', diagnostic_cat, int(opset))
 
