@@ -11,5 +11,9 @@ raw detector-head outputs. Variable-length bbox decode remains in Python.
 3. Only after the unsupported-op list is understood should plugins or graph
    rewrites be implemented and a TensorRT engine built.
 
+The LSS view transformer exports BEV pooling as the custom ONNX node
+`mmdeploy::bev_pool_v2`. Its existing CUDA forward preserves PyTorch export
+parity, but TensorRT will require a compatible plugin implementation.
+
 Do not commit `.onnx`, `.engine`, `.plan`, or profiling output. TensorRT engines
 must ultimately be rebuilt for the target Jetson software and GPU environment.

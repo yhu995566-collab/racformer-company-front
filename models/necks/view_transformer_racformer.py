@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from mmcv.cnn import build_conv_layer, build_norm_layer
 from mmcv.runner import BaseModule, force_fp32
 
-from models.csrc.bev_pool_v2.bev_pool import bev_pool_v2
+from models.csrc.bev_pool_v2.bev_pool import TRTBEVPoolv2, bev_pool_v2
 from mmdet.models.backbones.resnet import BasicBlock
 from mmdet.models.builder import NECKS
 
@@ -193,6 +193,16 @@ class LSSViewTransformer_racformer(BaseModule):
             dummy = torch.cat(dummy.unbind(dim=2), 1)
             return dummy
         feat = feat.permute(0, 1, 3, 4, 2)
+        if torch.onnx.is_in_onnx_export():
+            export_depth = depth.reshape(
+                -1, depth.shape[2], depth.shape[3], depth.shape[4])
+            export_feat = feat.reshape(
+                -1, feat.shape[2], feat.shape[3], feat.shape[4])
+            bev_feat = TRTBEVPoolv2.apply(
+                export_depth, export_feat, ranks_depth, ranks_feat,
+                ranks_bev, interval_starts, interval_lengths,
+                int(self.grid_size[1]), int(self.grid_size[0]))
+            return bev_feat.permute(0, 3, 1, 2).contiguous()
         bev_feat_shape = (depth.shape[0], int(self.grid_size[2]),
                           int(self.grid_size[1]), int(self.grid_size[0]),
                           feat.shape[-1])  # (B, Z, Y, X, C)
