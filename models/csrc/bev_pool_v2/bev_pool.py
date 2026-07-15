@@ -136,9 +136,18 @@ class TRTBEVPoolv2(torch.autograd.Function):
         depth = depth.reshape(1, n, d, h, w)
         bev_feat_shape = (depth.shape[0], 1, out_height, out_width,
                           feat.shape[-1])  # (B, Z, Y, X, C)
-        bev_feat = bev_pool_v2(depth, feat, ranks_depth, ranks_feat, ranks_bev,
-                               bev_feat_shape, interval_starts,
-                               interval_lengths)
+        depth = depth.contiguous().float()
+        feat = feat.contiguous().float()
+        ranks_depth = ranks_depth.contiguous().int()
+        ranks_feat = ranks_feat.contiguous().int()
+        ranks_bev = ranks_bev.contiguous().int()
+        interval_starts = interval_starts.contiguous().int()
+        interval_lengths = interval_lengths.contiguous().int()
+        bev_feat = feat.new_zeros(bev_feat_shape)
+        bev_pool_v2_ext.bev_pool_v2_forward(
+            depth, feat, bev_feat, ranks_depth, ranks_feat, ranks_bev,
+            interval_lengths, interval_starts)
+        bev_feat = bev_feat.permute(0, 4, 1, 2, 3).contiguous()
         bev_feat = bev_feat.squeeze(2)
         bev_feat = bev_feat.permute(0, 2, 3, 1)
         return bev_feat
