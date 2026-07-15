@@ -138,6 +138,12 @@ this first stateless export. Training-only gradient checkpointing is disabled
 after checkpoint loading because it does not change eval numerics and the
 PyTorch 2.0 legacy ONNX tracer cannot trace it reliably.
 
+MMCV radar voxelization also stays outside the graph: each frame supplies
+dynamic `radar_voxels`, `radar_num_points`, and batch-padded `radar_coors`.
+Opaque MSMV and deformable-attention CUDA autograd functions switch to their
+traceable PyTorch implementations during export so sensor-dependent values are
+not frozen into the ONNX graph.
+
 The exporter records a two-forward raw-output comparison. It is informational
 by default because radar voxelization and custom CUDA kernels can differ across
 independent runs. Add `--strict-boundary-check` only when deterministic kernels

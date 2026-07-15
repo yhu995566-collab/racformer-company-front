@@ -16,6 +16,21 @@ def parse_args():
     return parser.parse_args()
 
 
+def describe_value(onnx, value):
+    tensor_type = value.type.tensor_type
+    dtype = onnx.TensorProto.DataType.Name(tensor_type.elem_type)
+    dimensions = []
+    for dimension in tensor_type.shape.dim:
+        if dimension.HasField('dim_value'):
+            dimensions.append(str(dimension.dim_value))
+        elif dimension.HasField('dim_param'):
+            dimensions.append(dimension.dim_param)
+        else:
+            dimensions.append('?')
+    return '{}: [{}] {}'.format(
+        value.name, ', '.join(dimensions), dtype)
+
+
 def main():
     args = parse_args()
     try:
@@ -49,9 +64,9 @@ def main():
         'nodes: {}'.format(len(model.graph.node)),
         '', '=== Inputs ===',
     ]
-    lines.extend(value.name for value in model.graph.input)
+    lines.extend(describe_value(onnx, value) for value in model.graph.input)
     lines.extend(['', '=== Outputs ==='])
-    lines.extend(value.name for value in model.graph.output)
+    lines.extend(describe_value(onnx, value) for value in model.graph.output)
     lines.extend(['', '=== Operators ==='])
     lines.extend(
         '{}::{} x{}'.format(domain, operator, count)

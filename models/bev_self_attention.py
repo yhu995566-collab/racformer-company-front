@@ -191,7 +191,12 @@ class BEVSelfAttention(BaseModule):
         level_start_index = torch.tensor([0], dtype=torch.long, device=value.device)
         spatial_shapes = torch.tensor([spatial_shapes], dtype=torch.long, device=value.device)
 
-        if torch.cuda.is_available() and value.is_cuda:
+        if torch.onnx.is_in_onnx_export() or getattr(
+                self, '_deploy_onnx_fallback', False):
+            output = multi_scale_deformable_attn_pytorch(
+                value, spatial_shapes, sampling_locations,
+                attention_weights)
+        elif torch.cuda.is_available() and value.is_cuda:
 
             # using fp16 deformable attention is unstable because it performs many sum operations
             if value.dtype == torch.float16:

@@ -82,6 +82,18 @@ def disable_gradient_checkpointing(model):
     return disabled
 
 
+def enable_standard_onnx_fallbacks(model):
+    """Use traceable implementations instead of opaque CUDA autograd ops."""
+    import models.csrc.wrapper as sampling_wrapper
+    import models.racformer_transformer as transformer_module
+
+    sampling_wrapper.MSMV_CUDA = False
+    transformer_module.MSMV_CUDA = False
+    for module in model.modules():
+        if module.__class__.__name__ == 'BEVSelfAttention':
+            module._deploy_onnx_fallback = True
+
+
 def install_export_symbolics(opset):
     """Install compatibility symbolics missing from the PyTorch 2.0 exporter."""
     from torch.onnx import register_custom_op_symbolic
@@ -174,7 +186,7 @@ def main():
         wrapper = RaCFormerONNXWrapper(
             runner.model, preprocessor.final_height,
             preprocessor.final_width).eval()
-        inputs = build_export_inputs(batch)
+        inputs = build_export_inputs(batch, runner.model)
 
         report.extend(['', '=== Inputs ==='])
         report.extend(
@@ -183,6 +195,7 @@ def main():
 
         with torch.no_grad():
             legacy_outputs = legacy_raw_outputs(runner.model, batch)
+            enable_standard_onnx_fallbacks(runner.model)
             outputs = wrapper(*inputs)
         torch.cuda.synchronize(runner.device)
         report.extend(['', '=== PyTorch raw outputs ==='])
@@ -217,10 +230,14 @@ def main():
         mmcv.mkdir_or_exist(os.path.dirname(output_path))
         operator_type = torch.onnx.OperatorExportTypes.ONNX_FALLTHROUGH \
             if args.fallthrough else torch.onnx.OperatorExportTypes.ONNX
-        dynamic_axes = {
-            'radar_points_{}'.format(index): {0: 'radar_points_{}_count'.format(index)}
-            for index in range(8)
-        }
+        dynamic_axes = {}
+        for index in range(8):
+            voxel_count = 'radar_voxel_{}_count'.format(index)
+            dynamic_axes.update({
+                'radar_voxels_{}'.format(index): {0: voxel_count},
+                'radar_num_points_{}'.format(index): {0: voxel_count},
+                'radar_coors_{}'.format(index): {0: voxel_count},
+            })
         install_export_symbolics(args.opset)
         torch.onnx.export(
             wrapper,

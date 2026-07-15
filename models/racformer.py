@@ -134,18 +134,23 @@ class RaCFormer(MVXTwoStageDetector):
         if not self.with_pts_bbox:
             return None
 
-        for i, radar_point in enumerate(radar_points):
-            radar_point[:, 2] = 0
-            radar_points[i] = radar_point
+        if isinstance(radar_points, tuple):
+            voxels, num_points, coors = radar_points
+            batch_size = 1
+        else:
+            for i, radar_point in enumerate(radar_points):
+                radar_point[:, 2] = 0
+                radar_points[i] = radar_point
 
-        batch_size = len(radar_points)
-        if sum(point.shape[0] for point in radar_points) == 0:
-            height, width = self.radar_output_shape
-            empty_bev = radar_points[0].new_zeros(
-                (batch_size, self.radar_middle_channels, height, width))
-            return self.radar_bev_conv(empty_bev)
+            batch_size = len(radar_points)
+            if sum(point.shape[0] for point in radar_points) == 0:
+                height, width = self.radar_output_shape
+                empty_bev = radar_points[0].new_zeros(
+                    (batch_size, self.radar_middle_channels, height, width))
+                return self.radar_bev_conv(empty_bev)
 
-        voxels, num_points, coors, batch_size = self.radar_voxelize(radar_points)
+            voxels, num_points, coors, batch_size = \
+                self.radar_voxelize(radar_points)
         radar_features = self.radar_voxel_encoder(voxels, num_points, coors).to(torch.float32) ## pillar feature
 
         if radar_features.dim() == 3 and radar_features.shape[1] == 1:

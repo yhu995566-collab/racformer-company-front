@@ -19,5 +19,11 @@ PyTorch 2.0 does not export `aten::atan2` at opset 17. The deployment exporter
 lowers it to standard ONNX `Atan`, comparison, and `Where` nodes while retaining
 the full quadrant behavior needed by box and polar-coordinate transforms.
 
+Raw radar voxelization remains outside the TensorRT graph. Each of the eight
+frames enters the graph as dynamic `voxels`, `num_points`, and batch-padded
+`coors` tensors. The ROS/CUDA preprocessing path must reproduce MMCV
+voxelization before engine execution. MSMV sampling and deformable attention
+switch to their traceable PyTorch implementations only during ONNX export.
+
 Do not commit `.onnx`, `.engine`, `.plan`, or profiling output. TensorRT engines
 must ultimately be rebuilt for the target Jetson software and GPU environment.
