@@ -24,15 +24,23 @@ def msmv_sampling_pytorch(mlvl_feats, sampling_locations, scale_weights):
     _, Q, P, _ = sampling_locations.shape
 
     sampling_locations = sampling_locations * 2 - 1
-    sampling_locations = sampling_locations[:, :, :, None, :]  # [B, Q, P, 1, 3]
+    single_camera = mlvl_feats[0].shape[2] == 1
+    if single_camera:
+        sampling_grid = sampling_locations[..., :2]
+    else:
+        sampling_grid = sampling_locations[:, :, :, None, :]
 
     final = torch.zeros([B, C, Q, P], device=mlvl_feats[0].device)
 
     for lvl, feat in enumerate(mlvl_feats):
-        out = F.grid_sample(
-            feat, sampling_locations, mode='bilinear',
-            padding_mode='zeros', align_corners=True,
-        )[..., 0]  # [B, C, Q, P]
+        if single_camera:
+            out = F.grid_sample(
+                feat.squeeze(2), sampling_grid, mode='bilinear',
+                padding_mode='zeros', align_corners=True)
+        else:
+            out = F.grid_sample(
+                feat, sampling_grid, mode='bilinear',
+                padding_mode='zeros', align_corners=True)[..., 0]
         out = out * scale_weights[..., lvl].reshape(B, 1, Q, P)
         final += out
 
@@ -50,15 +58,23 @@ def msmv_sampling_pytorch_v2(mlvl_feats, sampling_locations, scale_weights):
     _, Q, P, _ = sampling_locations.shape
 
     sampling_locations = sampling_locations * 2 - 1
-    sampling_locations = sampling_locations[:, :, :, None, :]  # [B, Q, P, 1, 3]
+    single_camera = mlvl_feats[0].shape[2] == 1
+    if single_camera:
+        sampling_grid = sampling_locations[..., :2]
+    else:
+        sampling_grid = sampling_locations[:, :, :, None, :]
 
     # final = torch.zeros([B, C, Q, P], device=mlvl_feats[0].device)
     final = []
     for lvl, feat in enumerate(mlvl_feats):
-        out = F.grid_sample(
-            feat, sampling_locations, mode='bilinear',
-            padding_mode='zeros', align_corners=True,
-        )[..., 0]  # [B, C, Q, P]
+        if single_camera:
+            out = F.grid_sample(
+                feat.squeeze(2), sampling_grid, mode='bilinear',
+                padding_mode='zeros', align_corners=True)
+        else:
+            out = F.grid_sample(
+                feat, sampling_grid, mode='bilinear',
+                padding_mode='zeros', align_corners=True)[..., 0]
         # out = out * scale_weights[..., lvl].reshape(B, 1, Q, P)
         # final += out
         final.append(out)
