@@ -136,15 +136,19 @@ class LSSViewTransformer_racformer(BaseModule):
         coords = torch.cat((uvd, torch.ones_like(uvd[..., :1])), -1)
         coords[..., :2] = coords[..., :2] * torch.maximum(coords[..., 2:3], torch.ones_like(coords[..., 2:3])*eps)
 
-        img2lidars = []
-        for img_meta in img_metas:
-            img2lidar = []
-            for i in range(len(img_meta['lidar2img'])):
-                img2lidar.append(np.linalg.inv(img_meta['lidar2img'][i]))
-                # torch.linalg.inv
-            img2lidars.append(np.asarray(img2lidar))
-        img2lidars = np.asarray(img2lidars).astype(np.float32)
-        img2lidars = coords.new_tensor(img2lidars).to(img) # (B, N, 4, 4)
+        if all(torch.is_tensor(meta.get('img2lidar')) for meta in img_metas):
+            img2lidars = torch.stack([
+                meta['img2lidar'] for meta in img_metas
+            ]).to(device=img.device, dtype=img.dtype)
+        else:
+            img2lidars = []
+            for img_meta in img_metas:
+                img2lidar = []
+                for i in range(len(img_meta['lidar2img'])):
+                    img2lidar.append(np.linalg.inv(img_meta['lidar2img'][i]))
+                img2lidars.append(np.asarray(img2lidar))
+            img2lidars = np.asarray(img2lidars).astype(np.float32)
+            img2lidars = coords.new_tensor(img2lidars).to(img)
 
         # coords = coords.view(1, 1, W, H, self.D, 4, 1).repeat(B, N, 1, 1, 1, 1, 1)
         coords = coords.view(1,1,self.D,H,W,4,1).repeat(B,N,1,1,1,1,1)
@@ -583,6 +587,10 @@ class LSSViewTransformerBEVDepth_racformer(LSSViewTransformer_racformer):
         self.loss_func = FocalLoss(alpha=0.25, gamma=2.0, reduction="none")
 
     def get_mlp_input(self, img_metas):
+        if all(torch.is_tensor(meta.get('mlp_input')) for meta in img_metas):
+            return torch.cat([
+                meta['mlp_input'] for meta in img_metas
+            ], dim=0).to(dtype=torch.float32)
         B = len(img_metas)
         N = self.num_cams
         T = len(img_metas[0]['lidar2img']) // N    

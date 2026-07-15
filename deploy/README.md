@@ -128,6 +128,56 @@ radar/LSS frames, the six shared decoder-layer calls, attention/sampling/mixing,
 and bbox decode. It restores every wrapped method before exiting and does not
 modify model source or checkpoint semantics.
 
+## ONNX Compatibility Audit
+
+The first TensorRT step exports a fixed batch-size-one, left-camera,
+eight-frame FP32 graph. The graph ends at raw detector-head tensors
+`all_cls_scores` and `all_bbox_preds`; variable-length bbox decode stays outside
+the graph. Existing runtime cache optimizations are intentionally disabled for
+this first stateless export.
+
+Check the server environment, then attempt a standard ONNX export:
+
+```bash
+python -c "import torch, onnx; print(torch.__version__, onnx.__version__)"
+
+python -m deploy.export_onnx \
+  --config configs/deploy/racformer_company_front_left_pytorch.py \
+  --weights /mnt/diskNvme1/hyh/results/RaCFormer/racformer_company_front_velocity_v2/2026-07-07/18-46-40/epoch_36.pth \
+  --device cuda:0 \
+  --split val \
+  --sample-index 0 \
+  --opset 17 \
+  --out outputs/deploy_onnx/racformer_raw_fp32.onnx \
+  --report outputs/deploy_onnx/export_standard.txt
+```
+
+A failed standard export is useful: `export_standard.txt` records the first
+unsupported operation and traceback. To retain unsupported operators in an
+audit graph where PyTorch permits it, rerun with `--fallthrough` and a distinct
+output path:
+
+```bash
+python -m deploy.export_onnx \
+  --config configs/deploy/racformer_company_front_left_pytorch.py \
+  --weights /mnt/diskNvme1/hyh/results/RaCFormer/racformer_company_front_velocity_v2/2026-07-07/18-46-40/epoch_36.pth \
+  --device cuda:0 \
+  --split val \
+  --sample-index 0 \
+  --opset 17 \
+  --fallthrough \
+  --out outputs/deploy_onnx/racformer_raw_fp32_fallthrough.onnx \
+  --report outputs/deploy_onnx/export_fallthrough.txt
+
+python -m deploy.tensorrt.audit_onnx \
+  --onnx outputs/deploy_onnx/racformer_raw_fp32_fallthrough.onnx \
+  --out outputs/deploy_onnx/onnx_operator_audit.txt
+```
+
+If the standard ONNX export succeeds, use that graph for the audit instead.
+Do not build or benchmark a TensorRT engine until the ONNX checker passes and
+the custom/non-supported operator list has been reviewed.
+
 ## Synchronization
 
 Deployment code lives in the same Git repository as training code. Update a

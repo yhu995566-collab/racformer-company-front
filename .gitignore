@@ -121,6 +121,9 @@ mmdet3d/.mim
 
 # Pytorch
 *.pth
+*.onnx
+*.engine
+*.plan
 
 # demo
 # *.jpg

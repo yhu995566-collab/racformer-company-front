@@ -325,6 +325,8 @@ class RaCFormer(MVXTwoStageDetector):
                 for b in range(B):
                     img_meta = dict()
                     img_meta['lidar2img'] = img_metas[b]['lidar2img'][i*N:(i+1)*N]
+                    if 'img2lidar' in img_metas[b]:
+                        img_meta['img2lidar'] = img_metas[b]['img2lidar'][i*N:(i+1)*N]
                     img_meta['img_shape'] = img_metas[b]['img_shape'][i*N:(i+1)*N]
                     img_meta_b.append(img_meta)
                 if self.training:

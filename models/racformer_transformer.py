@@ -95,16 +95,29 @@ class RaCFormerTransformerDecoder(BaseModule):
         cls_scores, bbox_preds = [], []
 
         # calculate time difference according to timestamps
-        timestamps = np.array([m['img_timestamp'] for m in img_metas], dtype=np.float64)
-        timestamps = np.reshape(timestamps, [query_bbox.shape[0], -1, self.num_cams])
-        time_diff = timestamps[:, :1, :] - timestamps
-        time_diff = np.mean(time_diff, axis=-1).astype(np.float32)  # [B, F]
-        time_diff = torch.from_numpy(time_diff).to(query_bbox.device)  # [B, F]
+        if all(torch.is_tensor(m.get('time_diff')) for m in img_metas):
+            time_diff = torch.cat([
+                m['time_diff'] for m in img_metas
+            ], dim=0).to(device=query_bbox.device, dtype=query_bbox.dtype)
+        else:
+            timestamps = np.array(
+                [m['img_timestamp'] for m in img_metas], dtype=np.float64)
+            timestamps = np.reshape(
+                timestamps, [query_bbox.shape[0], -1, self.num_cams])
+            time_diff = timestamps[:, :1, :] - timestamps
+            time_diff = np.mean(time_diff, axis=-1).astype(np.float32)
+            time_diff = torch.from_numpy(time_diff).to(query_bbox.device)
         img_metas[0]['time_diff'] = time_diff
 
         # organize projections matrix and copy to CUDA
-        lidar2img = np.asarray([m['lidar2img'] for m in img_metas]).astype(np.float32)
-        lidar2img = torch.from_numpy(lidar2img).to(query_bbox.device)  # [B, N, 4, 4]
+        if all(torch.is_tensor(m.get('lidar2img')) for m in img_metas):
+            lidar2img = torch.stack([
+                m['lidar2img'] for m in img_metas
+            ]).to(device=query_bbox.device, dtype=query_bbox.dtype)
+        else:
+            lidar2img = np.asarray(
+                [m['lidar2img'] for m in img_metas]).astype(np.float32)
+            lidar2img = torch.from_numpy(lidar2img).to(query_bbox.device)
         img_metas[0]['lidar2img'] = lidar2img
 
         # group image features in advance for sampling, see `sampling_4d` for more details
