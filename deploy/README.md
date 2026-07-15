@@ -134,7 +134,9 @@ The first TensorRT step exports a fixed batch-size-one, left-camera,
 eight-frame FP32 graph. The graph ends at raw detector-head tensors
 `all_cls_scores` and `all_bbox_preds`; variable-length bbox decode stays outside
 the graph. Existing runtime cache optimizations are intentionally disabled for
-this first stateless export.
+this first stateless export. Training-only gradient checkpointing is disabled
+after checkpoint loading because it does not change eval numerics and the
+PyTorch 2.0 legacy ONNX tracer cannot trace it reliably.
 
 Check the server environment, then attempt a standard ONNX export:
 

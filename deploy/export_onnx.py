@@ -69,6 +69,16 @@ def legacy_raw_outputs(model, batch):
     return outputs['all_cls_scores'], outputs['all_bbox_preds']
 
 
+def disable_gradient_checkpointing(model):
+    """Disable training-only recomputation that the legacy exporter cannot trace."""
+    disabled = []
+    for name, module in model.named_modules():
+        if getattr(module, 'with_cp', False):
+            module.with_cp = False
+            disabled.append(name or '<root>')
+    return disabled
+
+
 def main():
     args = parse_args()
     report = [
@@ -94,6 +104,15 @@ def main():
         cpu_batch = preprocessor.prepare(frames)
         runner = RaCFormerPyTorchRunner(
             args.config, args.weights, device=args.device)
+        checkpoint_modules = disable_gradient_checkpointing(runner.model)
+        report.extend([
+            '', '=== Export preparation ===',
+            'disabled gradient-checkpoint modules: {}'.format(
+                len(checkpoint_modules)),
+        ])
+        report.extend(
+            'checkpoint disabled: {}'.format(name)
+            for name in checkpoint_modules)
         batch = runner.prepare(cpu_batch)
         wrapper = RaCFormerONNXWrapper(
             runner.model, preprocessor.final_height,
