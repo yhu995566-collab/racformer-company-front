@@ -86,7 +86,7 @@ def sampling_4d(sample_points, mlvl_feats, scale_weights, lidar2img, image_h,
         & (sample_points_cam[..., 1:2] < 1.0)
         & (sample_points_cam[..., 0:1] > 0.0)
         & (sample_points_cam[..., 0:1] < 1.0)
-    ).squeeze(-1).float()  # [B, T, N, Q, GP]
+    )[..., 0].float()  # [B, T, N, Q, GP]
     
     # for visualization only
     if DUMP.enabled:

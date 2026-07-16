@@ -35,7 +35,7 @@ def msmv_sampling_pytorch(mlvl_feats, sampling_locations, scale_weights):
     for lvl, feat in enumerate(mlvl_feats):
         if single_camera:
             out = F.grid_sample(
-                feat.squeeze(2), sampling_grid, mode='bilinear',
+                feat[:, :, 0, :, :], sampling_grid, mode='bilinear',
                 padding_mode='zeros', align_corners=True)
         else:
             out = F.grid_sample(
@@ -69,7 +69,7 @@ def msmv_sampling_pytorch_v2(mlvl_feats, sampling_locations, scale_weights):
     for lvl, feat in enumerate(mlvl_feats):
         if single_camera:
             out = F.grid_sample(
-                feat.squeeze(2), sampling_grid, mode='bilinear',
+                feat[:, :, 0, :, :], sampling_grid, mode='bilinear',
                 padding_mode='zeros', align_corners=True)
         else:
             out = F.grid_sample(
@@ -87,7 +87,7 @@ def msmv_sampling_pytorch_v2(mlvl_feats, sampling_locations, scale_weights):
     Q_idx = torch.arange(Q).view(1, 1, Q, 1, 1).to(max_indices.device)
     P_idx = torch.arange(P).view(1, 1, 1, P, 1).to(max_indices.device)
 
-    final = final[B_idx, C_idx, Q_idx, P_idx, idx].squeeze(-1)
+    final = final[B_idx, C_idx, Q_idx, P_idx, idx][..., 0]
 
     return final.permute(0, 2, 1, 3)
 
