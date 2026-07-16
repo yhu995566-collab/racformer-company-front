@@ -61,7 +61,15 @@ def sampling_4d(sample_points, mlvl_feats, scale_weights, lidar2img, image_h,
     sample_points = sample_points.transpose(1, 3)   # [B, T, N, Q, GP, 4, 1]
 
     # project 3d sampling points to N views
-    sample_points_cam = torch.matmul(lidar2img, sample_points).squeeze(-1)  # [B, T, N, Q, GP, 4]
+    if torch.onnx.is_in_onnx_export():
+        # PyTorch's ONNX MatMul lowering may emit an If whose branches retain
+        # different ranks for a broadcast matrix-vector product. Express the
+        # same product as fixed-rank multiply-and-reduce for TensorRT.
+        sample_points_cam = (
+            lidar2img * sample_points.transpose(-1, -2)).sum(dim=-1)
+    else:
+        sample_points_cam = torch.matmul(
+            lidar2img, sample_points).squeeze(-1)
 
     # homo coord -> pixel coord
     homo = sample_points_cam[..., 2:3]
