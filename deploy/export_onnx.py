@@ -8,6 +8,8 @@ import os
 import sys
 import traceback
 
+import numpy as np
+
 if __package__ in (None, ''):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -41,6 +43,9 @@ def parse_args():
         help='Preserve unsupported operators for graph auditing')
     parser.add_argument('--out', required=True)
     parser.add_argument('--report', required=True)
+    parser.add_argument(
+        '--fixture',
+        help='Optional NPZ containing TensorRT inputs and PyTorch outputs')
     return parser.parse_args()
 
 
@@ -55,6 +60,18 @@ def write_report(path, lines):
     with open(path, 'w') as stream:
         stream.write('\n'.join(lines) + '\n')
     print('Export report: {}'.format(path))
+
+
+def save_fixture(path, inputs, outputs):
+    path = os.path.abspath(path)
+    mmcv.mkdir_or_exist(os.path.dirname(path))
+    arrays = {}
+    for name, tensor in zip(INPUT_NAMES, inputs):
+        arrays[name] = tensor.detach().cpu().numpy()
+    for name, tensor in zip(OUTPUT_NAMES, outputs):
+        arrays[name] = tensor.detach().cpu().numpy()
+    np.savez_compressed(path, **arrays)
+    return path
 
 
 def legacy_raw_outputs(model, batch):
@@ -225,6 +242,14 @@ def main():
             report.append(
                 'warning: continuing because radar voxelization and custom '
                 'CUDA kernels can vary across independent full forwards')
+
+        if args.fixture:
+            fixture_path = save_fixture(args.fixture, inputs, outputs)
+            report.extend([
+                '', '=== TensorRT fixture ===',
+                'fixture: {}'.format(fixture_path),
+                'arrays: {}'.format(len(INPUT_NAMES) + len(OUTPUT_NAMES)),
+            ])
 
         output_path = os.path.abspath(args.out)
         mmcv.mkdir_or_exist(os.path.dirname(output_path))
