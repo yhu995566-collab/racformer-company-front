@@ -32,6 +32,8 @@ the parser reaches the complete graph.
 The LSS view transformer exports BEV pooling as the custom ONNX node
 `mmdeploy::bev_pool_v2`. Its existing CUDA forward preserves PyTorch export
 parity, but TensorRT will require a compatible plugin implementation.
+The minimal FP32 TensorRT 8.6 implementation and build instructions live in
+`plugins/bev_pool_v2/`.
 
 PyTorch 2.0 does not export `aten::atan2` at opset 17. The deployment exporter
 lowers it to standard ONNX `Atan`, comparison, and `Where` nodes while retaining

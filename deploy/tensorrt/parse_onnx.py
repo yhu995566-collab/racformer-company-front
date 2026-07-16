@@ -50,6 +50,10 @@ def main():
 
     logger = trt.Logger(trt.Logger.WARNING)
     trt.init_libnvinfer_plugins(logger, '')
+    creator = trt.get_plugin_registry().get_plugin_creator(
+        'bev_pool_v2', '1', '')
+    lines.append('bev_pool_v2 plugin registered: {}'.format(
+        creator is not None))
     builder = trt.Builder(logger)
     explicit_batch = 1 << int(
         trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)

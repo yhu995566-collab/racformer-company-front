@@ -116,7 +116,9 @@ class TRTBEVPoolv2(torch.autograd.Function):
             interval_starts,
             interval_lengths,
             out_height_i=out_height,
-            out_width_i=out_width)
+            out_width_i=out_width,
+            plugin_version_s='1',
+            plugin_namespace_s='')
 
     @staticmethod
     def forward(g,
