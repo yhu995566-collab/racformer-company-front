@@ -200,8 +200,8 @@ class RaCFormer(MVXTwoStageDetector):
         if NT % N != 0:
             raise ValueError(f'Image count {NT} is not divisible by num_cams={N}')
         T = NT // N
-        img = img.view(B * NT, C, H, W)
         img = img.float()
+        img = img.view(B * NT, C, H, W)
 
         radar_depth = radar_depth.view(B * NT, 1, H, W)
         radar_depth = radar_depth.float()

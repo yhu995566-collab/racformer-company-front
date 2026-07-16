@@ -24,6 +24,11 @@ Use `--plugin /absolute/path/plugin.so` for each TensorRT plugin library once
 plugins exist. The current PyTorch `bev_pool_v2_ext` is not a TensorRT plugin
 and must not be passed to this option.
 
+The image remains a UINT8 network input, but the model casts it to FP32 before
+the first reshape. TensorRT 8.6 permits UINT8 at the network boundary but not as
+an intermediate tensor. INT64-initializer downcast warnings can be audited after
+the parser reaches the complete graph.
+
 The LSS view transformer exports BEV pooling as the custom ONNX node
 `mmdeploy::bev_pool_v2`. Its existing CUDA forward preserves PyTorch export
 parity, but TensorRT will require a compatible plugin implementation.
