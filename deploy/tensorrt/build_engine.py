@@ -36,6 +36,19 @@ def main():
 
     import tensorrt as trt
 
+    class ReportLogger(trt.ILogger):
+        def __init__(self, report, minimum_severity):
+            super().__init__()
+            self.report = report
+            self.minimum_severity = minimum_severity
+
+        def log(self, severity, message):
+            if severity > self.minimum_severity:
+                return
+            entry = '[TRT] [{}] {}'.format(severity, message)
+            self.report.append(entry)
+            print(entry, flush=True)
+
     lines = [
         '=== RaCFormer FP32 TensorRT engine build ===',
         'TensorRT version: {}'.format(trt.__version__),
@@ -51,7 +64,7 @@ def main():
             ctypes.CDLL(path, mode=ctypes.RTLD_GLOBAL)
             lines.append('loaded plugin: {}'.format(path))
 
-        logger = trt.Logger(trt.Logger.WARNING)
+        logger = ReportLogger(lines, trt.ILogger.WARNING)
         trt.init_libnvinfer_plugins(logger, '')
         builder = trt.Builder(logger)
         explicit_batch = 1 << int(
