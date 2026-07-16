@@ -84,10 +84,8 @@ def main():
             min_shape = (args.min_voxels,) + shape[1:]
             opt_shape = (args.opt_voxels,) + shape[1:]
             max_shape = (args.max_voxels,) + shape[1:]
-            if not profile.set_shape(
-                    tensor.name, min_shape, opt_shape, max_shape):
-                raise RuntimeError(
-                    'failed to set profile for {}'.format(tensor.name))
+            profile.set_shape(
+                tensor.name, min_shape, opt_shape, max_shape)
             dynamic_inputs += 1
             lines.append('{}: {} / {} / {}'.format(
                 tensor.name, min_shape, opt_shape, max_shape))
@@ -95,6 +93,8 @@ def main():
             raise RuntimeError(
                 'expected 24 dynamic radar inputs, found {}'.format(
                     dynamic_inputs))
+        if not profile:
+            raise RuntimeError('TensorRT rejected the optimization profile')
         config.add_optimization_profile(profile)
 
         start = time.perf_counter()
