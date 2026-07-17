@@ -9,6 +9,7 @@ from mmcv.ops.multi_scale_deform_attn import multi_scale_deformable_attn_pytorch
 import warnings
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from mmcv.cnn import xavier_init
 
 from mmcv.runner.base_module import BaseModule
@@ -16,6 +17,31 @@ from mmcv.runner.base_module import BaseModule
 from mmcv.utils import ext_loader
 ext_module = ext_loader.load_ext(
     '_ext', ['ms_deform_attn_backward', 'ms_deform_attn_forward'])
+
+
+def single_level_deformable_attn_pytorch(
+        value, sampling_locations, attention_weights, height, width):
+    """Traceable one-level specialization of MMCV deformable attention."""
+    batch_size, _, num_heads, head_dim = value.shape
+    num_queries = sampling_locations.shape[1]
+    num_points = sampling_locations.shape[4]
+
+    value = value.permute(0, 2, 3, 1).reshape(
+        batch_size * num_heads, head_dim, height, width)
+    sampling_grid = sampling_locations[:, :, :, 0] * 2.0 - 1.0
+    sampling_grid = sampling_grid.permute(0, 2, 1, 3, 4).reshape(
+        batch_size * num_heads, num_queries, num_points, 2)
+    sampled = F.grid_sample(
+        value, sampling_grid, mode='bilinear', padding_mode='zeros',
+        align_corners=False)
+
+    weights = attention_weights[:, :, :, 0].permute(0, 2, 1, 3)
+    weights = weights.reshape(
+        batch_size * num_heads, 1, num_queries, num_points)
+    output = (sampled * weights).sum(dim=-1)
+    output = output.reshape(
+        batch_size, num_heads * head_dim, num_queries)
+    return output.permute(0, 2, 1).contiguous()
 
 
 # @ATTENTION.register_module()
@@ -188,15 +214,20 @@ class BEVSelfAttention(BaseModule):
             .reshape(bs*self.num_bev_queue, num_query, self.num_heads, self.num_levels, self.num_points).contiguous()
         sampling_locations = sampling_locations.permute(3, 0, 1, 2, 4, 5, 6)\
             .reshape(bs*self.num_bev_queue, num_query, self.num_heads, self.num_levels, self.num_points, 2).contiguous()
-        level_start_index = torch.tensor([0], dtype=torch.long, device=value.device)
-        spatial_shapes = torch.tensor([spatial_shapes], dtype=torch.long, device=value.device)
-
         if torch.onnx.is_in_onnx_export() or getattr(
                 self, '_deploy_onnx_fallback', False):
-            output = multi_scale_deformable_attn_pytorch(
-                value, spatial_shapes, sampling_locations,
-                attention_weights)
+            if self.num_levels != 1:
+                raise RuntimeError(
+                    'deployment BEV attention expects one feature level')
+            height, width = spatial_shapes
+            output = single_level_deformable_attn_pytorch(
+                value, sampling_locations, attention_weights,
+                height, width)
         elif torch.cuda.is_available() and value.is_cuda:
+            level_start_index = torch.tensor(
+                [0], dtype=torch.long, device=value.device)
+            spatial_shapes = torch.tensor(
+                [spatial_shapes], dtype=torch.long, device=value.device)
 
             # using fp16 deformable attention is unstable because it performs many sum operations
             if value.dtype == torch.float16:
@@ -207,6 +238,8 @@ class BEVSelfAttention(BaseModule):
                 value, spatial_shapes, level_start_index, sampling_locations,
                 attention_weights, self.im2col_step)
         else:
+            spatial_shapes = torch.tensor(
+                [spatial_shapes], dtype=torch.long, device=value.device)
             output = multi_scale_deformable_attn_pytorch(
                 value, spatial_shapes, sampling_locations, attention_weights)
             
