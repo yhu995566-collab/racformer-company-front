@@ -591,6 +591,8 @@ class BEVSampling(BaseModule):
         scale_weights = torch.softmax(scale_weights, dim=-1)
         
         scale_weights = scale_weights.expand(B, Q, self.num_heads, self.num_frames, self.num_levels, self.depth_num*self.num_points).contiguous()
+        if getattr(self, '_deploy_trt_sampling_barriers', False):
+            scale_weights = tensorrt_fusion_barrier(scale_weights)
 
         # A deployment cache may already hold the projected, query-independent
         # BEV value. In that case this large input is not consumed.
@@ -616,6 +618,8 @@ class BEVSampling(BaseModule):
         sampled_feats = self.attention(
             query_feat, attention_value, sampling_points, scale_weights,
             spatial_shapes=(bev_h, bev_w))
+        if getattr(self, '_deploy_trt_sampling_barriers', False):
+            sampled_feats = tensorrt_fusion_barrier(sampled_feats)
 
         return sampled_feats
         
