@@ -346,6 +346,11 @@ class ScaleAdaptiveSelfAttention(BaseModule):
     def calc_bbox_dists(self, bboxes):
         centers = decode_bbox(bboxes, self.pc_range)[..., :2]  # [B, Q, 2]
 
+        if getattr(self, '_deploy_vectorized_bbox_dist', False):
+            dist = torch.norm(
+                centers[:, :, None, :] - centers[:, None, :, :], dim=-1)
+            return -dist
+
         dist = []
         for b in range(centers.shape[0]):
             dist_b = torch.norm(centers[b].reshape(-1, 1, 2) - centers[b].reshape(1, -1, 2), dim=-1)
