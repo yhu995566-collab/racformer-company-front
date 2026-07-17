@@ -20,7 +20,8 @@ class RaCFormerONNXWrapper(nn.Module):
         self.image_width = int(image_width)
 
     def forward(self, image, radar_depth, radar_rcs, lidar2img, img2lidar,
-                mlp_input, time_diff, *radar_voxel_inputs):
+                mlp_input, time_diff, velocity_time_diff,
+                *radar_voxel_inputs):
         image_shape = (self.image_height, self.image_width, 3)
         img_meta = dict(
             img_shape=[image_shape] * 8,
@@ -29,7 +30,8 @@ class RaCFormerONNXWrapper(nn.Module):
             lidar2img=lidar2img[0],
             img2lidar=img2lidar[0],
             mlp_input=mlp_input,
-            time_diff=time_diff)
+            time_diff=time_diff,
+            velocity_time_diff=velocity_time_diff)
         if len(radar_voxel_inputs) != 24:
             raise ValueError('expected voxels, num_points, and coors for 8 frames')
         radar_points = [
@@ -59,6 +61,8 @@ def build_export_inputs(batch, model):
         batch.img_meta['img_timestamp'], dtype=np.float64).reshape(1, 8, 1)
     time_diff_np = (timestamps[:, :1] - timestamps).mean(
         axis=-1).astype('float32')
+    velocity_time_diff_np = time_diff_np[:, 1:2, None].copy()
+    velocity_time_diff_np[velocity_time_diff_np < 1e-5] = 1.0
 
     tensors = [
         batch.image,
@@ -68,6 +72,7 @@ def build_export_inputs(batch, model):
         torch.from_numpy(img2lidar_np).unsqueeze(0).to(device),
         torch.from_numpy(mlp_input_np).to(device),
         torch.from_numpy(time_diff_np).to(device),
+        torch.from_numpy(velocity_time_diff_np).to(device),
     ]
     for points in batch.radar_points:
         points = points.clone()
@@ -81,7 +86,7 @@ def build_export_inputs(batch, model):
 
 INPUT_NAMES = [
     'image', 'radar_depth', 'radar_rcs', 'lidar2img', 'img2lidar',
-    'mlp_input', 'time_diff',
+    'mlp_input', 'time_diff', 'velocity_time_diff',
 ]
 for frame_index in range(8):
     INPUT_NAMES.extend([

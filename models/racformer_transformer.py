@@ -282,9 +282,13 @@ class RaCFormerTransformerDecoderLayer(BaseModule):
         # calculate absolute velocity according to time difference
         time_diff = img_metas[0]['time_diff']  # [B, F]
         if time_diff.shape[1] > 1:
-            time_diff = time_diff.clone()
-            time_diff[time_diff < 1e-5] = 1.0
-            bbox_pred[..., 8:] = bbox_pred[..., 8:] / time_diff[:, 1:2, None]
+            velocity_time_diff = img_metas[0].get('velocity_time_diff')
+            if velocity_time_diff is None:
+                time_diff = time_diff.clone()
+                time_diff[time_diff < 1e-5] = 1.0
+                velocity_time_diff = time_diff[:, 1:2, None]
+            bbox_pred[..., 8:] = (
+                bbox_pred[..., 8:] / velocity_time_diff)
 
         if DUMP.enabled:
             query_bbox_dec = decode_bbox(query_bbox, self.pc_range)
