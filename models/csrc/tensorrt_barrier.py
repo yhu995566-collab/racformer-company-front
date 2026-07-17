@@ -7,11 +7,13 @@ class TensorRTFusionBarrier(torch.autograd.Function):
 
     @staticmethod
     def symbolic(graph, tensor):
-        return graph.op(
+        output = graph.op(
             'mmdeploy::racformer_identity',
             tensor,
             plugin_version_s='1',
             plugin_namespace_s='')
+        output.setType(tensor.type())
+        return output
 
     @staticmethod
     def forward(ctx, tensor):
