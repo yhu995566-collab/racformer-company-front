@@ -468,6 +468,7 @@ class BEVSampling(BaseModule):
         self.embed_dims = embed_dims
         self.pc_range = pc_range
         self.depth_num = depth_num
+        self.spatial_shapes = tuple(spatial_shapes)
 
         self.ray_points_offset = nn.Linear(embed_dims, self.depth_num)
         self.sampling_offset = nn.Linear(embed_dims, depth_num * num_heads * num_points * 2)
@@ -572,9 +573,13 @@ class BEVSampling(BaseModule):
         if skip_value_preparation:
             attention_value = None
         else:
-            bev_mask = torch.zeros(
-                (B, bev_h, bev_w), device=bev_feats.device).to(bev_feats.dtype)
-            bev_pos = self.positional_encoding(bev_mask).to(bev_feats.dtype)
+            bev_pos = getattr(self, '_deploy_bev_pos_cache', None)
+            if bev_pos is None:
+                bev_mask = torch.zeros(
+                    (B, bev_h, bev_w), device=bev_feats.device).to(
+                        bev_feats.dtype)
+                bev_pos = self.positional_encoding(bev_mask).to(
+                    bev_feats.dtype)
             bev_pos = bev_pos.view(
                 B, 1, self.embed_dims, bev_h, bev_w).repeat(
                     1, self.num_frames, 1, 1, 1)

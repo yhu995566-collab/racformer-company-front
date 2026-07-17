@@ -106,9 +106,27 @@ def enable_standard_onnx_fallbacks(model):
 
     sampling_wrapper.MSMV_CUDA = False
     transformer_module.MSMV_CUDA = False
+    positional_cache_bytes = 0
+    positional_cache_count = 0
     for module in model.modules():
         if module.__class__.__name__ == 'BEVSelfAttention':
             module._deploy_onnx_fallback = True
+        if module.__class__.__name__ == 'BEVSampling':
+            height, width = module.spatial_shapes
+            parameter = next(module.positional_encoding.parameters())
+            mask = torch.zeros(
+                (1, height, width), device=parameter.device,
+                dtype=parameter.dtype)
+            with torch.no_grad():
+                cache = module.positional_encoding(mask).detach()
+            if '_deploy_bev_pos_cache' in module._buffers:
+                module._deploy_bev_pos_cache = cache
+            else:
+                module.register_buffer(
+                    '_deploy_bev_pos_cache', cache, persistent=False)
+            positional_cache_count += 1
+            positional_cache_bytes += cache.numel() * cache.element_size()
+    return positional_cache_count, positional_cache_bytes
 
 
 def install_export_symbolics(opset):
@@ -212,13 +230,19 @@ def main():
 
         with torch.no_grad():
             legacy_outputs = legacy_raw_outputs(runner.model, batch)
-            enable_standard_onnx_fallbacks(runner.model)
+            cache_count, cache_bytes = enable_standard_onnx_fallbacks(
+                runner.model)
             outputs = wrapper(*inputs)
         torch.cuda.synchronize(runner.device)
         report.extend(['', '=== PyTorch raw outputs ==='])
         report.extend(
             describe_tensor(name, tensor)
             for name, tensor in zip(OUTPUT_NAMES, outputs))
+        report.extend([
+            'cached BEV positional maps: {}'.format(cache_count),
+            'cached BEV positional map size: {:.2f} MB'.format(
+                cache_bytes / (1024 ** 2)),
+        ])
         report.extend(['', '=== Tensor metadata boundary check ==='])
         boundary_passed = True
         for name, legacy, current in zip(
