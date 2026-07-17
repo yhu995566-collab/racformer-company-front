@@ -273,13 +273,24 @@ class RaCFormerTransformerDecoderLayer(BaseModule):
 
         query_feat = self.norm1(self.self_attn(query_bbox, query_feat, attn_mask))
 
-        query_radar_feat = self.sampling_radar_bev(query_bbox, query_feat, radar_bev_feats, img_metas, d_region=self.d_region_list[layer]) # here
+        if getattr(self, '_deploy_trt_branch_barriers', False):
+            radar_query_bbox = tensorrt_fusion_barrier(query_bbox)
+            radar_query_feat = tensorrt_fusion_barrier(query_feat)
+            lss_query_bbox = tensorrt_fusion_barrier(query_bbox)
+            lss_query_feat = tensorrt_fusion_barrier(query_feat)
+            image_query_bbox = tensorrt_fusion_barrier(query_bbox)
+            image_query_feat = tensorrt_fusion_barrier(query_feat)
+        else:
+            radar_query_bbox = lss_query_bbox = image_query_bbox = query_bbox
+            radar_query_feat = lss_query_feat = image_query_feat = query_feat
+
+        query_radar_feat = self.sampling_radar_bev(radar_query_bbox, radar_query_feat, radar_bev_feats, img_metas, d_region=self.d_region_list[layer]) # here
         query_radar_feat = self.norm_radar_bev(query_radar_feat)
-        query_lss_feat = self.sampling_lss_bev(query_bbox, query_feat, lss_bev_feats, img_metas, d_region=self.d_region_list[layer]) # here
+        query_lss_feat = self.sampling_lss_bev(lss_query_bbox, lss_query_feat, lss_bev_feats, img_metas, d_region=self.d_region_list[layer]) # here
         query_lss_feat = self.norm_lss_bev(query_lss_feat)
 
 
-        sampled_feat = self.sampling(query_bbox, query_feat, mlvl_feats, img_metas, d_region=self.d_region_list[layer])
+        sampled_feat = self.sampling(image_query_bbox, image_query_feat, mlvl_feats, img_metas, d_region=self.d_region_list[layer])
 
         query_feat = self.norm2(self.mixing(sampled_feat, query_feat))
         if getattr(self, '_deploy_trt_branch_barriers', False):
@@ -451,6 +462,8 @@ class RaCFormerSampling(BaseModule):
         sampling_points = theta_d2xy_coods(sampling_points, self.pc_range)
         sampling_points[..., 0:1] = sampling_points[..., 0:1] * (self.pc_range[3] - self.pc_range[0]) + self.pc_range[0]
         sampling_points[..., 1:2] = sampling_points[..., 1:2] * (self.pc_range[4] - self.pc_range[1]) + self.pc_range[1]       
+        if getattr(self, '_deploy_trt_sampling_barriers', False):
+            sampling_points = tensorrt_fusion_barrier(sampling_points)
 
         # scale weights
         scale_weights = self.scale_weights(query_feat).view(B, Q, self.num_groups, self.num_frames, self.depth_num*self.num_points, self.num_levels).contiguous()
@@ -588,6 +601,8 @@ class BEVSampling(BaseModule):
         sampling_points = sampling_points.reshape(B, Q, self.num_frames, self.num_heads, self.num_points*self.depth_num, 2)
 
         sampling_points = theta_d2xy_coods(sampling_points, self.pc_range)
+        if getattr(self, '_deploy_trt_sampling_barriers', False):
+            sampling_points = tensorrt_fusion_barrier(sampling_points)
                 
         # scale weights
         sampling_points = sampling_points.permute(0,1,3,2,4,5).contiguous()
