@@ -115,6 +115,8 @@ def enable_standard_onnx_fallbacks(model):
             module._deploy_trt_branch_barriers = True
         if module.__class__.__name__ == 'BEVSampling':
             module._deploy_trt_sampling_barriers = True
+        if module.__class__.__name__ == 'RaCFormerSampling':
+            module._deploy_trt_sampling_barriers = True
         if module.__class__.__name__ == 'ScaleAdaptiveSelfAttention':
             module._deploy_vectorized_bbox_dist = True
         if module.__class__.__name__ == 'BEVSelfAttention':

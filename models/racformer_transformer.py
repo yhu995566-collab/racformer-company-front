@@ -455,6 +455,8 @@ class RaCFormerSampling(BaseModule):
         # scale weights
         scale_weights = self.scale_weights(query_feat).view(B, Q, self.num_groups, self.num_frames, self.depth_num*self.num_points, self.num_levels).contiguous()
         scale_weights = torch.softmax(scale_weights, dim=-1)
+        if getattr(self, '_deploy_trt_sampling_barriers', False):
+            scale_weights = tensorrt_fusion_barrier(scale_weights)
 
         # sampling
         sampled_feats = sampling_4d(
@@ -464,6 +466,8 @@ class RaCFormerSampling(BaseModule):
             img_metas[0]['lidar2img'],
             image_h, image_w, num_cams=self.num_cams
         )  # [B, Q, G, FP, C]
+        if getattr(self, '_deploy_trt_sampling_barriers', False):
+            sampled_feats = tensorrt_fusion_barrier(sampled_feats)
 
         return sampled_feats
     
