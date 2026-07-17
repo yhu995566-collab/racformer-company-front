@@ -282,6 +282,10 @@ class RaCFormerTransformerDecoderLayer(BaseModule):
         sampled_feat = self.sampling(query_bbox, query_feat, mlvl_feats, img_metas, d_region=self.d_region_list[layer])
 
         query_feat = self.norm2(self.mixing(sampled_feat, query_feat))
+        if getattr(self, '_deploy_trt_branch_barriers', False):
+            query_radar_feat = tensorrt_fusion_barrier(query_radar_feat)
+            query_lss_feat = tensorrt_fusion_barrier(query_lss_feat)
+            query_feat = tensorrt_fusion_barrier(query_feat)
         query_feat = self.norm_fusion(self.fusion(torch.cat((query_feat, query_radar_feat, query_lss_feat), dim=-1)))
         query_feat = self.norm3(self.ffn(query_feat))
 
