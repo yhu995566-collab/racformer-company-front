@@ -13,6 +13,7 @@ namespace racformer {
 namespace {
 
 constexpr char kPluginName[] = "bev_pool_v2";
+constexpr char kIdentityPluginName[] = "racformer_identity";
 constexpr char kPluginVersion[] = "1";
 
 template <typename T>
@@ -216,5 +217,145 @@ class BEVPoolV2PluginCreator final : public nvinfer1::IPluginCreator {
 };
 
 REGISTER_TENSORRT_PLUGIN(BEVPoolV2PluginCreator);
+
+class IdentityPlugin final : public nvinfer1::IPluginV2DynamicExt {
+ public:
+  IdentityPlugin() = default;
+  IdentityPlugin(const void*, size_t length) { assert(length == 0); }
+
+  const char* getPluginType() const noexcept override {
+    return kIdentityPluginName;
+  }
+  const char* getPluginVersion() const noexcept override {
+    return kPluginVersion;
+  }
+  int getNbOutputs() const noexcept override { return 1; }
+
+  nvinfer1::DimsExprs getOutputDimensions(
+      int output_index, const nvinfer1::DimsExprs* inputs, int input_count,
+      nvinfer1::IExprBuilder&) noexcept override {
+    assert(output_index == 0 && input_count == 1);
+    return inputs[0];
+  }
+
+  bool supportsFormatCombination(
+      int position, const nvinfer1::PluginTensorDesc* tensors,
+      int input_count, int output_count) noexcept override {
+    assert(input_count == 1 && output_count == 1 && position < 2);
+    if (tensors[position].format != nvinfer1::TensorFormat::kLINEAR) {
+      return false;
+    }
+    const auto type = tensors[position].type;
+    if (type != nvinfer1::DataType::kFLOAT &&
+        type != nvinfer1::DataType::kHALF) {
+      return false;
+    }
+    return position == 0 || type == tensors[0].type;
+  }
+
+  void configurePlugin(
+      const nvinfer1::DynamicPluginTensorDesc*, int,
+      const nvinfer1::DynamicPluginTensorDesc*, int) noexcept override {}
+
+  size_t getWorkspaceSize(
+      const nvinfer1::PluginTensorDesc*, int,
+      const nvinfer1::PluginTensorDesc*, int) const noexcept override {
+    return 0;
+  }
+
+  int enqueue(const nvinfer1::PluginTensorDesc* input_desc,
+              const nvinfer1::PluginTensorDesc*, const void* const* inputs,
+              void* const* outputs, void*,
+              cudaStream_t stream) noexcept override {
+    size_t elements = 1;
+    for (int index = 0; index < input_desc[0].dims.nbDims; ++index) {
+      elements *= static_cast<size_t>(input_desc[0].dims.d[index]);
+    }
+    const size_t element_size =
+        input_desc[0].type == nvinfer1::DataType::kHALF ? 2 : 4;
+    const auto status = cudaMemcpyAsync(
+        outputs[0], inputs[0], elements * element_size,
+        cudaMemcpyDeviceToDevice, stream);
+    return status == cudaSuccess ? 0 : 1;
+  }
+
+  size_t getSerializationSize() const noexcept override { return 0; }
+  void serialize(void*) const noexcept override {}
+
+  IdentityPlugin* clone() const noexcept override {
+    auto* plugin = new IdentityPlugin();
+    plugin->setPluginNamespace(namespace_.c_str());
+    return plugin;
+  }
+
+  nvinfer1::DataType getOutputDataType(
+      int, const nvinfer1::DataType* input_types,
+      int) const noexcept override {
+    return input_types[0];
+  }
+
+  int initialize() noexcept override { return 0; }
+  void terminate() noexcept override {}
+  void destroy() noexcept override { delete this; }
+
+  void setPluginNamespace(const char* plugin_namespace) noexcept override {
+    namespace_ = plugin_namespace == nullptr ? "" : plugin_namespace;
+  }
+  const char* getPluginNamespace() const noexcept override {
+    return namespace_.c_str();
+  }
+
+  void attachToContext(cudnnContext*, cublasContext*,
+                       nvinfer1::IGpuAllocator*) noexcept override {}
+  void detachFromContext() noexcept override {}
+
+ private:
+  std::string namespace_;
+};
+
+class IdentityPluginCreator final : public nvinfer1::IPluginCreator {
+ public:
+  IdentityPluginCreator() {
+    field_collection_.nbFields = 0;
+    field_collection_.fields = nullptr;
+  }
+
+  const char* getPluginName() const noexcept override {
+    return kIdentityPluginName;
+  }
+  const char* getPluginVersion() const noexcept override {
+    return kPluginVersion;
+  }
+  const nvinfer1::PluginFieldCollection* getFieldNames() noexcept override {
+    return &field_collection_;
+  }
+
+  nvinfer1::IPluginV2* createPlugin(
+      const char*, const nvinfer1::PluginFieldCollection*) noexcept override {
+    auto* plugin = new IdentityPlugin();
+    plugin->setPluginNamespace(namespace_.c_str());
+    return plugin;
+  }
+
+  nvinfer1::IPluginV2* deserializePlugin(
+      const char*, const void* data, size_t length) noexcept override {
+    auto* plugin = new IdentityPlugin(data, length);
+    plugin->setPluginNamespace(namespace_.c_str());
+    return plugin;
+  }
+
+  void setPluginNamespace(const char* plugin_namespace) noexcept override {
+    namespace_ = plugin_namespace == nullptr ? "" : plugin_namespace;
+  }
+  const char* getPluginNamespace() const noexcept override {
+    return namespace_.c_str();
+  }
+
+ private:
+  std::string namespace_;
+  nvinfer1::PluginFieldCollection field_collection_{};
+};
+
+REGISTER_TENSORRT_PLUGIN(IdentityPluginCreator);
 
 }  // namespace racformer

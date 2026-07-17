@@ -82,6 +82,10 @@ def main():
         'bev_pool_v2', '1', '')
     lines.append('bev_pool_v2 plugin registered: {}'.format(
         creator is not None))
+    identity_creator = trt.get_plugin_registry().get_plugin_creator(
+        'racformer_identity', '1', '')
+    lines.append('racformer_identity plugin registered: {}'.format(
+        identity_creator is not None))
     builder = trt.Builder(logger)
     explicit_batch = 1 << int(
         trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)

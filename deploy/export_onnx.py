@@ -109,6 +109,8 @@ def enable_standard_onnx_fallbacks(model):
     positional_cache_bytes = 0
     positional_cache_count = 0
     for module in model.modules():
+        if module.__class__.__name__ == 'RaCFormerTransformerDecoder':
+            module._deploy_trt_decoder_barriers = True
         if module.__class__.__name__ == 'ScaleAdaptiveSelfAttention':
             module._deploy_vectorized_bbox_dist = True
         if module.__class__.__name__ == 'BEVSelfAttention':

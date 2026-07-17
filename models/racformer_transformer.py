@@ -11,6 +11,7 @@ from .utils import inverse_sigmoid, DUMP
 from .sparsebev_sampling import sampling_4d, make_sample_points
 from .checkpoint import checkpoint as cp
 from .csrc.wrapper import MSMV_CUDA
+from .csrc.tensorrt_barrier import tensorrt_fusion_barrier
 
 from .bev_self_attention import BEVSelfAttention
 
@@ -147,6 +148,10 @@ class RaCFormerTransformerDecoder(BaseModule):
                 query_bbox, query_feat, mlvl_feats, lss_bev_feats, radar_bev_feats, attn_mask, img_metas, layer=i
             )
             query_bbox = bbox_pred.clone().detach()
+            if (getattr(self, '_deploy_trt_decoder_barriers', False)
+                    and i + 1 < self.num_layers):
+                query_feat = tensorrt_fusion_barrier(query_feat)
+                query_bbox = tensorrt_fusion_barrier(query_bbox)
 
             bbox_pred = theta_d2xy_coods(bbox_pred, self.pc_range)
 
