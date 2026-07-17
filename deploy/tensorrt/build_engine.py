@@ -17,6 +17,9 @@ def parse_args():
     parser.add_argument('--opt-voxels', type=int, default=1024)
     parser.add_argument('--max-voxels', type=int, default=4096)
     parser.add_argument('--workspace-gb', type=float, default=8.0)
+    parser.add_argument(
+        '--disable-cudnn-tactics', action='store_true',
+        help='Exclude cuDNN tactics when the loaded cuDNN does not match TRT')
     return parser.parse_args()
 
 
@@ -79,6 +82,13 @@ def main():
 
         config = builder.create_builder_config()
         config.clear_flag(trt.BuilderFlag.TF32)
+        if args.disable_cudnn_tactics:
+            tactic_sources = config.get_tactic_sources()
+            tactic_sources &= ~(1 << int(trt.TacticSource.CUDNN))
+            config.set_tactic_sources(tactic_sources)
+            lines.append('cuDNN tactics: disabled')
+        else:
+            lines.append('cuDNN tactics: enabled')
         workspace_bytes = int(args.workspace_gb * (1024 ** 3))
         config.set_memory_pool_limit(
             trt.MemoryPoolType.WORKSPACE, workspace_bytes)

@@ -42,6 +42,12 @@ one shared voxel-count profile to all 24 dynamic radar tensors. Start with a
 bounded profile that covers measured data; do not use the model's theoretical
 40,000-voxel cap without checking target memory and build time.
 
+If an x86 TensorRT installation was linked against a different cuDNN version
+than the only library available in the PyTorch environment,
+`build_engine --disable-cudnn-tactics` can isolate that mismatch without
+changing the training environment. Such an engine is for functional diagnosis;
+its latency is not the deployment performance baseline.
+
 PyTorch 2.0 does not export `aten::atan2` at opset 17. The deployment exporter
 lowers it to standard ONNX `Atan`, comparison, and `Where` nodes while retaining
 the full quadrant behavior needed by box and polar-coordinate transforms.
