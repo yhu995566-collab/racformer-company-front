@@ -21,6 +21,9 @@ def parse_args():
         '--builder-optimization-level', type=int, choices=range(6),
         help='TensorRT builder optimization level (0-5)')
     parser.add_argument(
+        '--fusion-break-before', action='append', default=[],
+        help='Mark input 0 of matching TensorRT layers as an engine output')
+    parser.add_argument(
         '--disable-cudnn-tactics', action='store_true',
         help='Exclude cuDNN tactics when the loaded cuDNN does not match TRT')
     return parser.parse_args()
@@ -82,6 +85,28 @@ def main():
                 lines.append('parser error {}: {}'.format(
                     index, parser.get_error(index)))
             raise RuntimeError('TensorRT could not parse the ONNX graph')
+
+        for pattern in args.fusion_break_before:
+            matches = []
+            for index in range(network.num_layers):
+                layer = network.get_layer(index)
+                if pattern not in layer.name:
+                    continue
+                tensor = layer.get_input(0)
+                if tensor is None:
+                    raise RuntimeError(
+                        'fusion-break layer has no input 0: {}'.format(
+                            layer.name))
+                if not tensor.is_network_output:
+                    network.mark_output(tensor)
+                matches.append((index, layer.name, tensor.name,
+                                tuple(tensor.shape)))
+            if not matches:
+                raise RuntimeError(
+                    'fusion-break pattern matched no layers: {}'.format(
+                        pattern))
+            lines.append('fusion break before {!r}: {}'.format(
+                pattern, matches))
 
         config = builder.create_builder_config()
         config.clear_flag(trt.BuilderFlag.TF32)
