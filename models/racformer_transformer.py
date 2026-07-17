@@ -674,6 +674,8 @@ class AdaptiveMixing(nn.Module):
 
         '''generate mixing parameters'''
         params = self.parameter_generator(query)
+        if getattr(self, '_deploy_trt_mixing_barriers', False):
+            params = tensorrt_fusion_barrier(params)
         params = params.reshape(B*Q, G, -1)
         out = x.reshape(B*Q, G, P, C)
 
@@ -683,6 +685,8 @@ class AdaptiveMixing(nn.Module):
 
         '''adaptive channel mixing'''
         out = torch.matmul(out, M)
+        if getattr(self, '_deploy_trt_mixing_barriers', False):
+            out = tensorrt_fusion_barrier(out)
         channel_norm_shape = (self.in_points, self.eff_out_dim)
         if torch.onnx.is_in_onnx_export():
             norm_weight = out.new_ones(channel_norm_shape)
@@ -695,6 +699,8 @@ class AdaptiveMixing(nn.Module):
 
         '''adaptive point mixing'''
         out = torch.matmul(S, out)  # implicitly transpose and matmul
+        if getattr(self, '_deploy_trt_mixing_barriers', False):
+            out = tensorrt_fusion_barrier(out)
         point_norm_shape = (self.out_points, self.eff_out_dim)
         if torch.onnx.is_in_onnx_export():
             norm_weight = out.new_ones(point_norm_shape)

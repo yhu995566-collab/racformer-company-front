@@ -23,6 +23,7 @@ from deploy.onnx_wrapper import (
     INPUT_NAMES, OUTPUT_NAMES, RaCFormerONNXWrapper, build_export_inputs)
 from deploy.preprocessing import DeploymentPreprocessor
 from deploy.pytorch_runner import RaCFormerPyTorchRunner
+from models.csrc.tensorrt_barrier import tensorrt_fusion_barrier
 
 
 def parse_args():
@@ -108,6 +109,12 @@ def enable_standard_onnx_fallbacks(model):
     transformer_module.MSMV_CUDA = False
     positional_cache_bytes = 0
     positional_cache_count = 0
+    layernorm_barrier_count = 0
+
+    def barrier_layernorm_input(module, inputs):
+        del module
+        return (tensorrt_fusion_barrier(inputs[0]),) + inputs[1:]
+
     for module in model.modules():
         if module.__class__.__name__ == 'RaCFormerTransformerDecoder':
             module._deploy_trt_decoder_barriers = True
@@ -117,8 +124,13 @@ def enable_standard_onnx_fallbacks(model):
             module._deploy_trt_sampling_barriers = True
         if module.__class__.__name__ == 'RaCFormerSampling':
             module._deploy_trt_sampling_barriers = True
+        if module.__class__.__name__ == 'AdaptiveMixing':
+            module._deploy_trt_mixing_barriers = True
         if module.__class__.__name__ == 'ScaleAdaptiveSelfAttention':
             module._deploy_vectorized_bbox_dist = True
+        if isinstance(module, torch.nn.LayerNorm):
+            module.register_forward_pre_hook(barrier_layernorm_input)
+            layernorm_barrier_count += 1
         if module.__class__.__name__ == 'BEVSelfAttention':
             module._deploy_onnx_fallback = True
         if module.__class__.__name__ == 'BEVSampling':
@@ -136,7 +148,9 @@ def enable_standard_onnx_fallbacks(model):
                     '_deploy_bev_pos_cache', cache, persistent=False)
             positional_cache_count += 1
             positional_cache_bytes += cache.numel() * cache.element_size()
-    return positional_cache_count, positional_cache_bytes
+    return (
+        positional_cache_count, positional_cache_bytes,
+        layernorm_barrier_count)
 
 
 def install_export_symbolics(opset):
@@ -240,8 +254,8 @@ def main():
 
         with torch.no_grad():
             legacy_outputs = legacy_raw_outputs(runner.model, batch)
-            cache_count, cache_bytes = enable_standard_onnx_fallbacks(
-                runner.model)
+            cache_count, cache_bytes, layernorm_barrier_count = \
+                enable_standard_onnx_fallbacks(runner.model)
             outputs = wrapper(*inputs)
         torch.cuda.synchronize(runner.device)
         report.extend(['', '=== PyTorch raw outputs ==='])
@@ -252,6 +266,8 @@ def main():
             'cached BEV positional maps: {}'.format(cache_count),
             'cached BEV positional map size: {:.2f} MB'.format(
                 cache_bytes / (1024 ** 2)),
+            'TensorRT LayerNorm input barriers: {}'.format(
+                layernorm_barrier_count),
         ])
         report.extend(['', '=== Tensor metadata boundary check ==='])
         boundary_passed = True
