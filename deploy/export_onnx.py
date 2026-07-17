@@ -42,6 +42,9 @@ def parse_args():
     parser.add_argument(
         '--fallthrough', action='store_true',
         help='Preserve unsupported operators for graph auditing')
+    parser.add_argument(
+        '--constant-folding', action='store_true',
+        help='Fold fixed-shape ONNX subgraphs during export')
     parser.add_argument('--out', required=True)
     parser.add_argument('--report', required=True)
     parser.add_argument(
@@ -217,6 +220,7 @@ def main():
         'opset: {}'.format(args.opset),
         'operator mode: {}'.format(
             'ONNX_FALLTHROUGH' if args.fallthrough else 'ONNX'),
+        'constant folding: {}'.format(args.constant_folding),
         'output boundary: raw all_cls_scores + all_bbox_preds (decode excluded)',
     ]
     try:
@@ -320,7 +324,7 @@ def main():
             output_path,
             export_params=True,
             opset_version=args.opset,
-            do_constant_folding=False,
+            do_constant_folding=args.constant_folding,
             input_names=INPUT_NAMES,
             output_names=OUTPUT_NAMES,
             dynamic_axes=dynamic_axes,
