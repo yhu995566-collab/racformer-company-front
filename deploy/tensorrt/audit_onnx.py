@@ -54,17 +54,24 @@ def dependency_neighborhood(nodes, centers, radius):
             consumers[name].add(index)
 
     selected = set(centers)
-    frontier = set(centers)
+    upstream = set(centers)
+    downstream = set(centers)
     for _ in range(max(0, radius)):
-        neighbors = set()
-        for index in frontier:
+        next_upstream = set()
+        for index in upstream:
             node = nodes[index]
-            neighbors.update(
+            next_upstream.update(
                 producers[name] for name in node.input if name in producers)
+        upstream = next_upstream - selected
+        selected.update(upstream)
+
+        next_downstream = set()
+        for index in downstream:
+            node = nodes[index]
             for name in node.output:
-                neighbors.update(consumers[name])
-        frontier = neighbors - selected
-        selected.update(frontier)
+                next_downstream.update(consumers[name])
+        downstream = next_downstream - selected
+        selected.update(downstream)
     return sorted(selected)
 
 
