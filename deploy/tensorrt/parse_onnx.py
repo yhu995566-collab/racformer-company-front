@@ -14,6 +14,13 @@ def parse_args():
     parser.add_argument(
         '--plugin', action='append', default=[],
         help='TensorRT plugin shared library to load before parsing')
+    parser.add_argument(
+        '--layer-index', action='append', type=int, default=[],
+        help='TensorRT network layer index to inspect after parsing')
+    parser.add_argument(
+        '--layer-match', action='append', default=[],
+        help='Substring used to find TensorRT layer or tensor names')
+    parser.add_argument('--layer-radius', type=int, default=8)
     return parser.parse_args()
 
 
@@ -24,6 +31,27 @@ def write_report(path, lines):
         stream.write('\n'.join(lines) + '\n')
     print('\n'.join(lines))
     print('TensorRT parser report: {}'.format(path))
+
+
+def describe_tensor(tensor):
+    if tensor is None:
+        return '<none>'
+    return '{} shape={} dtype={}'.format(
+        tensor.name, tuple(tensor.shape), tensor.dtype)
+
+
+def describe_layer(network, index):
+    layer = network.get_layer(index)
+    lines = [
+        'layer {}: type={}, name={}'.format(index, layer.type, layer.name),
+    ]
+    for input_index in range(layer.num_inputs):
+        lines.append('  input {}: {}'.format(
+            input_index, describe_tensor(layer.get_input(input_index))))
+    for output_index in range(layer.num_outputs):
+        lines.append('  output {}: {}'.format(
+            output_index, describe_tensor(layer.get_output(output_index))))
+    return lines
 
 
 def main():
@@ -84,6 +112,40 @@ def main():
             tensor = network.get_output(index)
             lines.append('{}: {} {}'.format(
                 tensor.name, tuple(tensor.shape), tensor.dtype))
+
+        inspect_indices = set()
+        radius = max(0, args.layer_radius)
+        for center in args.layer_index:
+            start = max(0, center - radius)
+            end = min(network.num_layers, center + radius + 1)
+            inspect_indices.update(range(start, end))
+        matched_centers = []
+        for index in range(network.num_layers):
+            layer = network.get_layer(index)
+            names = [layer.name]
+            names.extend(
+                tensor.name for tensor_index in range(layer.num_inputs)
+                for tensor in [layer.get_input(tensor_index)]
+                if tensor is not None)
+            names.extend(
+                tensor.name for tensor_index in range(layer.num_outputs)
+                for tensor in [layer.get_output(tensor_index)]
+                if tensor is not None)
+            if any(pattern in name for pattern in args.layer_match
+                   for name in names):
+                matched_centers.append(index)
+                start = max(0, index - radius)
+                end = min(network.num_layers, index + radius + 1)
+                inspect_indices.update(range(start, end))
+        if inspect_indices:
+            lines.extend([
+                '', '=== TensorRT layer inspection ===',
+                'requested indices: {}'.format(args.layer_index),
+                'matched centers: {}'.format(matched_centers),
+                'radius: {}'.format(radius),
+            ])
+            for index in sorted(inspect_indices):
+                lines.extend(describe_layer(network, index))
 
     write_report(args.out, lines)
     if not parsed:
