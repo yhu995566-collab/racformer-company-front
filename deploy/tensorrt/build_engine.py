@@ -18,6 +18,9 @@ def parse_args():
     parser.add_argument('--max-voxels', type=int, default=4096)
     parser.add_argument('--workspace-gb', type=float, default=8.0)
     parser.add_argument(
+        '--builder-optimization-level', type=int, choices=range(6),
+        help='TensorRT builder optimization level (0-5)')
+    parser.add_argument(
         '--disable-cudnn-tactics', action='store_true',
         help='Exclude cuDNN tactics when the loaded cuDNN does not match TRT')
     return parser.parse_args()
@@ -82,6 +85,16 @@ def main():
 
         config = builder.create_builder_config()
         config.clear_flag(trt.BuilderFlag.TF32)
+        if args.builder_optimization_level is not None:
+            if not hasattr(config, 'builder_optimization_level'):
+                raise RuntimeError(
+                    'this TensorRT version does not expose '
+                    'builder_optimization_level')
+            config.builder_optimization_level = args.builder_optimization_level
+            lines.append('builder optimization level: {}'.format(
+                args.builder_optimization_level))
+        else:
+            lines.append('builder optimization level: TensorRT default')
         if args.disable_cudnn_tactics:
             tactic_sources = config.get_tactic_sources()
             tactic_sources &= ~(1 << int(trt.TacticSource.CUDNN))

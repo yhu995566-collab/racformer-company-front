@@ -13,6 +13,10 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Audit an exported ONNX graph')
     parser.add_argument('--onnx', required=True)
     parser.add_argument('--out', required=True)
+    parser.add_argument(
+        '--node-name', action='append', default=[],
+        help='Exact ONNX node name whose dependency neighborhood is printed')
+    parser.add_argument('--node-radius', type=int, default=1)
     return parser.parse_args()
 
 
@@ -29,6 +33,39 @@ def describe_value(onnx, value):
             dimensions.append('?')
     return '{}: [{}] {}'.format(
         value.name, ', '.join(dimensions), dtype)
+
+
+def describe_node(node, index):
+    return [
+        'node {}: domain={}, op={}, name={}'.format(
+            index, node.domain or 'ai.onnx', node.op_type, node.name),
+        '  inputs: {}'.format(list(node.input)),
+        '  outputs: {}'.format(list(node.output)),
+    ]
+
+
+def dependency_neighborhood(nodes, centers, radius):
+    producers = {}
+    consumers = collections.defaultdict(set)
+    for index, node in enumerate(nodes):
+        for name in node.output:
+            producers[name] = index
+        for name in node.input:
+            consumers[name].add(index)
+
+    selected = set(centers)
+    frontier = set(centers)
+    for _ in range(max(0, radius)):
+        neighbors = set()
+        for index in frontier:
+            node = nodes[index]
+            neighbors.update(
+                producers[name] for name in node.input if name in producers)
+            for name in node.output:
+                neighbors.update(consumers[name])
+        frontier = neighbors - selected
+        selected.update(frontier)
+    return sorted(selected)
 
 
 def main():
@@ -78,6 +115,28 @@ def main():
             for domain, operator, count in custom)
     else:
         lines.append('none found')
+
+    if args.node_name:
+        nodes = list(model.graph.node)
+        centers = [
+            index for index, node in enumerate(nodes)
+            if node.name in args.node_name
+        ]
+        missing = sorted(set(args.node_name) - {
+            nodes[index].name for index in centers
+        })
+        selected = dependency_neighborhood(
+            nodes, centers, args.node_radius)
+        lines.extend([
+            '', '=== Node dependency inspection ===',
+            'requested names: {}'.format(args.node_name),
+            'matched centers: {}'.format(centers),
+            'missing names: {}'.format(missing),
+            'dependency radius: {}'.format(max(0, args.node_radius)),
+        ])
+        for index in selected:
+            lines.extend(describe_node(nodes[index], index))
+
     lines.extend([
         '', 'A clean ONNX checker result does not guarantee TensorRT support.',
         'Use trtexec parser output to identify unsupported standard ONNX ops.',
