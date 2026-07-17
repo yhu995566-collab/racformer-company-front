@@ -28,6 +28,7 @@ class RaCFormerONNXWrapper(nn.Module):
             ori_shape=[image_shape] * 8,
             pad_shape=[image_shape] * 8,
             lidar2img=lidar2img[0],
+            decoder_lidar2img=lidar2img,
             img2lidar=img2lidar[0],
             mlp_input=mlp_input,
             time_diff=time_diff,

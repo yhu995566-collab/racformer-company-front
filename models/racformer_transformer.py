@@ -110,7 +110,12 @@ class RaCFormerTransformerDecoder(BaseModule):
         img_metas[0]['time_diff'] = time_diff
 
         # organize projections matrix and copy to CUDA
-        if all(torch.is_tensor(m.get('lidar2img')) for m in img_metas):
+        if all(torch.is_tensor(m.get('decoder_lidar2img'))
+               for m in img_metas):
+            lidar2img = torch.cat([
+                m['decoder_lidar2img'] for m in img_metas
+            ], dim=0).to(device=query_bbox.device, dtype=query_bbox.dtype)
+        elif all(torch.is_tensor(m.get('lidar2img')) for m in img_metas):
             lidar2img = torch.stack([
                 m['lidar2img'] for m in img_metas
             ]).to(device=query_bbox.device, dtype=query_bbox.dtype)
@@ -287,8 +292,13 @@ class RaCFormerTransformerDecoderLayer(BaseModule):
                 time_diff = time_diff.clone()
                 time_diff[time_diff < 1e-5] = 1.0
                 velocity_time_diff = time_diff[:, 1:2, None]
-            bbox_pred[..., 8:] = (
-                bbox_pred[..., 8:] / velocity_time_diff)
+                bbox_pred[..., 8:] = (
+                    bbox_pred[..., 8:] / velocity_time_diff)
+            else:
+                bbox_pred = torch.cat([
+                    bbox_pred[..., :8],
+                    bbox_pred[..., 8:] / velocity_time_diff,
+                ], dim=-1)
 
         if DUMP.enabled:
             query_bbox_dec = decode_bbox(query_bbox, self.pc_range)
