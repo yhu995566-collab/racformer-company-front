@@ -98,22 +98,40 @@ def sampling_4d(sample_points, mlvl_feats, scale_weights, lidar2img, image_h,
     valid_mask = valid_mask.permute(0, 1, 3, 4, 2)  # [B, T, Q, GP, N]
     sample_points_cam = sample_points_cam.permute(0, 1, 3, 4, 2, 5)  # [B, T, Q, GP, N, 2]
 
-    # prepare batched indexing
-    i_batch = torch.arange(B, dtype=torch.long, device=sample_points.device)
-    i_query = torch.arange(Q, dtype=torch.long, device=sample_points.device)
-    i_time = torch.arange(T, dtype=torch.long, device=sample_points.device)
-    i_point = torch.arange(G * P, dtype=torch.long, device=sample_points.device)
-    i_batch = i_batch.view(B, 1, 1, 1, 1).expand(B, T, Q, G * P, 1)
-    i_time = i_time.view(1, T, 1, 1, 1).expand(B, T, Q, G * P, 1)
-    i_query = i_query.view(1, 1, Q, 1, 1).expand(B, T, Q, G * P, 1)
-    i_point = i_point.view(1, 1, 1, G * P, 1).expand(B, T, Q, G * P, 1)
-    
-    # we only keep at most one valid sampling point, see https://zhuanlan.zhihu.com/p/654821380
-    i_view = torch.argmax(valid_mask, dim=-1)[..., None]  # [B, T, Q, GP, 1]
+    if N == 1:
+        # The only camera is always selected. Avoid exporting the generic
+        # argmax/advanced-indexing graph, which TensorRT cannot optimize.
+        sample_points_cam = sample_points_cam[..., 0:1, :]
+        valid_mask = valid_mask[..., 0:1]
+        i_view = torch.zeros_like(valid_mask, dtype=torch.long)
+    else:
+        # prepare batched indexing
+        i_batch = torch.arange(
+            B, dtype=torch.long, device=sample_points.device)
+        i_query = torch.arange(
+            Q, dtype=torch.long, device=sample_points.device)
+        i_time = torch.arange(
+            T, dtype=torch.long, device=sample_points.device)
+        i_point = torch.arange(
+            G * P, dtype=torch.long, device=sample_points.device)
+        i_batch = i_batch.view(B, 1, 1, 1, 1).expand(
+            B, T, Q, G * P, 1)
+        i_time = i_time.view(1, T, 1, 1, 1).expand(
+            B, T, Q, G * P, 1)
+        i_query = i_query.view(1, 1, Q, 1, 1).expand(
+            B, T, Q, G * P, 1)
+        i_point = i_point.view(1, 1, 1, G * P, 1).expand(
+            B, T, Q, G * P, 1)
 
-    # index the only one sampling point and its valid flag
-    sample_points_cam = sample_points_cam[i_batch, i_time, i_query, i_point, i_view, :]  # [B, Q, GP, 1, 2]
-    valid_mask = valid_mask[i_batch, i_time, i_query, i_point, i_view]  # [B, Q, GP, 1]
+        # Keep at most one valid sampling point.
+        i_view = torch.argmax(
+            valid_mask, dim=-1)[..., None]  # [B, T, Q, GP, 1]
+
+        # Index the selected sampling point and its valid flag.
+        sample_points_cam = sample_points_cam[
+            i_batch, i_time, i_query, i_point, i_view, :]
+        valid_mask = valid_mask[
+            i_batch, i_time, i_query, i_point, i_view]
 
     # treat the view index as a new axis for grid_sample and normalize the view index to [0, 1]
     view_denominator = max(N - 1, 1)
