@@ -70,6 +70,23 @@ def find_onnx_shape_parameter_tensors(model):
     }
 
 
+def prune_unreachable_nodes(model):
+    required_tensors = {output.name for output in model.graph.output}
+    kept_reversed = []
+    for node in reversed(model.graph.node):
+        if not any(output in required_tensors for output in node.output):
+            continue
+        kept_reversed.append(node)
+        required_tensors.update(
+            name for name in node.input if name)
+
+    kept_nodes = list(reversed(kept_reversed))
+    removed_count = len(model.graph.node) - len(kept_nodes)
+    del model.graph.node[:]
+    model.graph.node.extend(kept_nodes)
+    return removed_count
+
+
 def main():
     args = parse_args()
     lines = [
@@ -164,6 +181,7 @@ def main():
         if not removals:
             raise RuntimeError('no zero-dimension Concat inputs were removed')
 
+        removed_dead_nodes = prune_unreachable_nodes(model)
         onnx.checker.check_model(model)
         output_path = os.path.abspath(args.out)
         os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
@@ -171,6 +189,7 @@ def main():
         lines.extend([
             'removed Concat inputs: {}'.format(len(removals)),
             *removals,
+            'removed unreachable nodes: {}'.format(removed_dead_nodes),
             'unresolved zero-dimension uses: 0',
             'onnx checker: PASS',
             'status: SUCCESS',
