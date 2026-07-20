@@ -45,6 +45,9 @@ def parse_args():
     parser.add_argument(
         '--constant-folding', action='store_true',
         help='Fold fixed-shape ONNX subgraphs during export')
+    parser.add_argument(
+        '--mixing-chunk-size', type=int, default=32768,
+        help='Output width of each deployment AdaptiveMixing projection')
     parser.add_argument('--out', required=True)
     parser.add_argument('--report', required=True)
     parser.add_argument(
@@ -103,7 +106,7 @@ def disable_gradient_checkpointing(model):
     return disabled
 
 
-def enable_standard_onnx_fallbacks(model):
+def enable_standard_onnx_fallbacks(model, mixing_chunk_size):
     """Use traceable implementations instead of opaque CUDA autograd ops."""
     import models.csrc.wrapper as sampling_wrapper
     import models.racformer_transformer as transformer_module
@@ -129,7 +132,7 @@ def enable_standard_onnx_fallbacks(model):
             module._deploy_trt_sampling_barriers = True
         if module.__class__.__name__ == 'AdaptiveMixing':
             module._deploy_trt_mixing_barriers = True
-            module._deploy_trt_parameter_chunk_size = 4096
+            module._deploy_trt_parameter_chunk_size = mixing_chunk_size
         if module.__class__.__name__ == 'ScaleAdaptiveSelfAttention':
             module._deploy_vectorized_bbox_dist = True
         if isinstance(module, torch.nn.LayerNorm):
@@ -222,9 +225,12 @@ def main():
         'operator mode: {}'.format(
             'ONNX_FALLTHROUGH' if args.fallthrough else 'ONNX'),
         'constant folding: {}'.format(args.constant_folding),
+        'AdaptiveMixing chunk size: {}'.format(args.mixing_chunk_size),
         'output boundary: raw all_cls_scores + all_bbox_preds (decode excluded)',
     ]
     try:
+        if args.mixing_chunk_size <= 0:
+            raise ValueError('mixing-chunk-size must be positive')
         cfg = Config.fromfile(args.config)
         importlib.import_module('models')
         importlib.import_module('loaders')
@@ -260,7 +266,8 @@ def main():
         with torch.no_grad():
             legacy_outputs = legacy_raw_outputs(runner.model, batch)
             cache_count, cache_bytes, layernorm_barrier_count = \
-                enable_standard_onnx_fallbacks(runner.model)
+                enable_standard_onnx_fallbacks(
+                    runner.model, args.mixing_chunk_size)
             outputs = wrapper(*inputs)
         torch.cuda.synchronize(runner.device)
         report.extend(['', '=== PyTorch raw outputs ==='])
