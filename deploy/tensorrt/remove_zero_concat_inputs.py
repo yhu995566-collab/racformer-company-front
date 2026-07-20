@@ -29,14 +29,17 @@ def write_report(path, lines):
 
 def find_zero_dim_tensors(network):
     tensors = {}
+    shape_tensors = {}
     for layer_index in range(network.num_layers):
         layer = network.get_layer(layer_index)
         for output_index in range(layer.num_outputs):
             tensor = layer.get_output(output_index)
             if tensor is not None and 0 in tuple(tensor.shape):
-                tensors[tensor.name] = (
+                target = shape_tensors \
+                    if tensor.is_shape_tensor else tensors
+                target[tensor.name] = (
                     tuple(tensor.shape), layer_index, layer.name)
-    return tensors
+    return tensors, shape_tensors
 
 
 def main():
@@ -68,9 +71,11 @@ def main():
                     index, parser.get_error(index)))
             raise RuntimeError('TensorRT could not parse the ONNX graph')
 
-        zero_tensors = find_zero_dim_tensors(network)
-        lines.append('zero-dimension tensors found: {}'.format(
+        zero_tensors, zero_shape_tensors = find_zero_dim_tensors(network)
+        lines.append('zero-dimension execution tensors found: {}'.format(
             len(zero_tensors)))
+        lines.append('zero-length shape tensors ignored: {}'.format(
+            len(zero_shape_tensors)))
         for name in sorted(zero_tensors):
             shape, layer_index, layer_name = zero_tensors[name]
             lines.append(
