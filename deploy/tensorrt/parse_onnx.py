@@ -21,6 +21,9 @@ def parse_args():
         '--layer-match', action='append', default=[],
         help='Substring used to find TensorRT layer or tensor names')
     parser.add_argument('--layer-radius', type=int, default=8)
+    parser.add_argument(
+        '--fail-on-zero-dim', action='store_true',
+        help='Fail after parsing if any TensorRT tensor has a zero dimension')
     return parser.parse_args()
 
 
@@ -52,6 +55,27 @@ def describe_layer(network, index):
         lines.append('  output {}: {}'.format(
             output_index, describe_tensor(layer.get_output(output_index))))
     return lines
+
+
+def find_zero_dim_tensors(network):
+    tensors = {}
+    producers = {}
+    consumers = {}
+    for layer_index in range(network.num_layers):
+        layer = network.get_layer(layer_index)
+        for output_index in range(layer.num_outputs):
+            tensor = layer.get_output(output_index)
+            if tensor is None or 0 not in tuple(tensor.shape):
+                continue
+            tensors[tensor.name] = tensor
+            producers[tensor.name] = (layer_index, layer.name)
+        for input_index in range(layer.num_inputs):
+            tensor = layer.get_input(input_index)
+            if tensor is None:
+                continue
+            consumers.setdefault(tensor.name, []).append(
+                (layer_index, layer.name, input_index))
+    return tensors, producers, consumers
 
 
 def main():
@@ -104,6 +128,7 @@ def main():
     for index in range(parser.num_errors):
         lines.append('error {}: {}'.format(index, parser.get_error(index)))
 
+    zero_dim_tensors = {}
     if parsed:
         lines.extend([
             'network inputs: {}'.format(network.num_inputs),
@@ -120,6 +145,25 @@ def main():
             tensor = network.get_output(index)
             lines.append('{}: {} {}'.format(
                 tensor.name, tuple(tensor.shape), tensor.dtype))
+
+        zero_dim_tensors, producers, consumers = find_zero_dim_tensors(
+            network)
+        lines.extend([
+            '', '=== Zero-dimension tensor audit ===',
+            'zero-dimension tensors: {}'.format(len(zero_dim_tensors)),
+        ])
+        for name in sorted(zero_dim_tensors):
+            tensor = zero_dim_tensors[name]
+            producer_index, producer_name = producers[name]
+            lines.append(
+                '{} shape={} producer=layer {} {!r}'.format(
+                    name, tuple(tensor.shape),
+                    producer_index, producer_name))
+            for layer_index, layer_name, input_index in consumers.get(
+                    name, []):
+                lines.append(
+                    '  consumer=layer {} {!r} input {}'.format(
+                        layer_index, layer_name, input_index))
 
         inspect_indices = set()
         radius = max(0, args.layer_radius)
@@ -158,6 +202,10 @@ def main():
     write_report(args.out, lines)
     if not parsed:
         raise RuntimeError('TensorRT could not parse the ONNX graph')
+    if args.fail_on_zero_dim and zero_dim_tensors:
+        raise RuntimeError(
+            'TensorRT graph contains {} zero-dimension tensors'.format(
+                len(zero_dim_tensors)))
 
 
 if __name__ == '__main__':
