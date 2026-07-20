@@ -51,6 +51,10 @@ def parse_args():
     parser.add_argument(
         '--msmv-plugin', action='store_true',
         help='Export the existing multi-scale sampling CUDA op as a TRT plugin')
+    parser.add_argument(
+        '--single-camera-projection-plugin', action='store_true',
+        help='Export single-camera projection and coordinate packing as a '
+             'TensorRT plugin')
     parser.add_argument('--out', required=True)
     parser.add_argument('--report', required=True)
     parser.add_argument(
@@ -110,7 +114,8 @@ def disable_gradient_checkpointing(model):
 
 
 def enable_standard_onnx_fallbacks(
-        model, mixing_chunk_size, use_msmv_plugin):
+        model, mixing_chunk_size, use_msmv_plugin,
+        use_single_camera_projection_plugin):
     """Use traceable implementations instead of opaque CUDA autograd ops."""
     import models.csrc.wrapper as sampling_wrapper
     import models.racformer_transformer as transformer_module
@@ -123,6 +128,17 @@ def enable_standard_onnx_fallbacks(
     else:
         sampling_wrapper.MSMV_CUDA = False
         transformer_module.MSMV_CUDA = False
+    camera_sampling_modules = [
+        module for module in model.modules()
+        if module.__class__.__name__ == 'RaCFormerSampling'
+    ]
+    if use_single_camera_projection_plugin and (
+            not camera_sampling_modules or
+            any(module.num_cams != 1 for module in camera_sampling_modules)):
+        raise RuntimeError(
+            'single-camera projection plugin requires num_cams=1')
+    sampling_wrapper.SINGLE_CAMERA_PROJECTION_TRT = \
+        use_single_camera_projection_plugin
     positional_cache_bytes = 0
     positional_cache_count = 0
     layernorm_barrier_count = 0
@@ -237,11 +253,16 @@ def main():
         'constant folding: {}'.format(args.constant_folding),
         'AdaptiveMixing chunk size: {}'.format(args.mixing_chunk_size),
         'MSMV TensorRT plugin: {}'.format(args.msmv_plugin),
+        'single-camera projection TensorRT plugin: {}'.format(
+            args.single_camera_projection_plugin),
         'output boundary: raw all_cls_scores + all_bbox_preds (decode excluded)',
     ]
     try:
         if args.mixing_chunk_size <= 0:
             raise ValueError('mixing-chunk-size must be positive')
+        if args.single_camera_projection_plugin and not args.msmv_plugin:
+            raise ValueError(
+                '--single-camera-projection-plugin requires --msmv-plugin')
         cfg = Config.fromfile(args.config)
         importlib.import_module('models')
         importlib.import_module('loaders')
@@ -282,7 +303,8 @@ def main():
             torch.cuda.synchronize(runner.device)
             cache_count, cache_bytes, layernorm_barrier_count = \
                 enable_standard_onnx_fallbacks(
-                    runner.model, args.mixing_chunk_size, args.msmv_plugin)
+                    runner.model, args.mixing_chunk_size, args.msmv_plugin,
+                    args.single_camera_projection_plugin)
             outputs = wrapper(*inputs)
         torch.cuda.synchronize(runner.device)
         report.extend(['', '=== PyTorch raw outputs ==='])

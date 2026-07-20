@@ -2,7 +2,9 @@ import torch
 import torch.nn.functional as F
 from .bbox.utils import decode_bbox
 from .utils import rotation_3d_in_axis, DUMP
-from .csrc.wrapper import msmv_sampling, msmv_sampling_v2
+from .csrc.wrapper import (
+    msmv_sampling, msmv_sampling_v2, project_single_camera,
+    single_camera_projection_enabled)
 
 
 def make_sample_points(query_bbox, offset, pc_range, return_wlh=False):
@@ -45,6 +47,20 @@ def sampling_4d(sample_points, mlvl_feats, scale_weights, lidar2img, image_h,
 
     B, Q, T, G, P, _ = sample_points.shape  # [B, Q, T, G, P, 3]
     N = num_cams
+
+    if N == 1 and aggregate and single_camera_projection_enabled():
+        sample_points_cam = project_single_camera(
+            sample_points, lidar2img, image_h, image_w)
+        scale_weights = scale_weights.reshape(B, Q, G, T, P, -1)
+        scale_weights = scale_weights.permute(0, 2, 3, 1, 4, 5)
+        scale_weights = scale_weights.reshape(B * G * T, Q, P, -1)
+        final = msmv_sampling(
+            mlvl_feats, sample_points_cam.contiguous(),
+            scale_weights.contiguous())
+        C = final.shape[2]
+        final = final.reshape(B, T, G, Q, C, P)
+        final = final.permute(0, 3, 2, 1, 5, 4)
+        return final.flatten(3, 4)
     
     sample_points = sample_points.reshape(B, Q, T, G * P, 3)
 

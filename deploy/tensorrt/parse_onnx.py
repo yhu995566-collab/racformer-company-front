@@ -147,6 +147,11 @@ def main():
         'racformer_msmv_sampling', '1', '')
     lines.append('racformer_msmv_sampling plugin registered: {}'.format(
         msmv_creator is not None))
+    projection_creator = trt.get_plugin_registry().get_plugin_creator(
+        'racformer_single_camera_projection', '1', '')
+    lines.append(
+        'racformer_single_camera_projection plugin registered: {}'.format(
+            projection_creator is not None))
     builder = trt.Builder(logger)
     explicit_batch = 1 << int(
         trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)

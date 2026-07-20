@@ -1,6 +1,8 @@
 import torch
 import torch.nn.functional as F
 
+SINGLE_CAMERA_PROJECTION_TRT = False
+
 try:
     from ._msmv_sampling_cuda import _ms_deform_attn_cuda_c2345_forward, _ms_deform_attn_cuda_c2345_backward
     from ._msmv_sampling_cuda import _ms_deform_attn_cuda_c23456_forward, _ms_deform_attn_cuda_c23456_backward
@@ -26,6 +28,62 @@ def _msmv_sampling_symbolic(g, *inputs):
     except (AttributeError, TypeError):
         output.setType(feature.type())
     return output
+
+
+class SingleCameraProjection(torch.autograd.Function):
+    image_h = 0
+    image_w = 0
+
+    @staticmethod
+    def symbolic(g, sample_points, lidar2img):
+        output = g.op(
+            'mmdeploy::racformer_single_camera_projection',
+            sample_points, lidar2img,
+            image_h_i=SingleCameraProjection.image_h,
+            image_w_i=SingleCameraProjection.image_w)
+        try:
+            sizes = sample_points.type().sizes()
+            output.setType(sample_points.type().with_sizes([
+                sizes[0] * sizes[2] * sizes[3],
+                sizes[1], sizes[4], 3,
+            ]))
+        except (AttributeError, TypeError):
+            output.setType(sample_points.type())
+        return output
+
+    @staticmethod
+    def forward(ctx, sample_points, lidar2img):
+        del ctx
+        points = sample_points.permute(0, 2, 1, 3, 4, 5)
+        homogeneous = torch.cat(
+            [points, torch.ones_like(points[..., :1])], dim=-1)
+        projection = lidar2img[:, :, None, None, None, :, :]
+        projected = (
+            projection * homogeneous[..., None, :]).sum(dim=-1)
+        depth = torch.maximum(
+            projected[..., 2:3],
+            torch.zeros_like(projected[..., 2:3]) + 1e-5)
+        xy = projected[..., 0:2] / depth
+        xy = torch.stack([
+            xy[..., 0] / SingleCameraProjection.image_w,
+            xy[..., 1] / SingleCameraProjection.image_h,
+        ], dim=-1)
+        locations = torch.cat(
+            [xy, torch.zeros_like(xy[..., :1])], dim=-1)
+        return locations.permute(0, 1, 3, 2, 4, 5).reshape(
+            sample_points.shape[0] * sample_points.shape[2] *
+            sample_points.shape[3],
+            sample_points.shape[1], sample_points.shape[4], 3)
+
+
+def single_camera_projection_enabled():
+    return SINGLE_CAMERA_PROJECTION_TRT
+
+
+def project_single_camera(sample_points, lidar2img, image_h, image_w):
+    SingleCameraProjection.image_h = int(image_h)
+    SingleCameraProjection.image_w = int(image_w)
+    return SingleCameraProjection.apply(sample_points, lidar2img)
 
 
 def msmv_sampling_pytorch(mlvl_feats, sampling_locations, scale_weights):

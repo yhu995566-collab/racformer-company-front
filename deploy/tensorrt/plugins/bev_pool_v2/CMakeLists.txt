@@ -23,7 +23,9 @@ add_library(racformer_bev_pool_v2_trt SHARED
   bev_pool_v2_plugin.cpp
   bev_pool_v2_kernel.cu
   msmv_sampling_plugin.cpp
-  msmv_sampling_kernel.cu)
+  msmv_sampling_kernel.cu
+  single_camera_projection_plugin.cpp
+  single_camera_projection_kernel.cu)
 target_include_directories(racformer_bev_pool_v2_trt PRIVATE
   ${TENSORRT_INCLUDE_DIR})
 target_link_libraries(racformer_bev_pool_v2_trt PRIVATE
