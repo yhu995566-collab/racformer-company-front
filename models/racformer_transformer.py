@@ -600,7 +600,8 @@ class BEVSampling(BaseModule):
         sampling_points = torch.cat((sampling_points[..., 0:1], sampling_points[..., 1:2]+sampling_points_d), dim=-1)
         sampling_points = sampling_points.reshape(B, Q, self.num_frames, self.num_heads, self.num_points*self.depth_num, 2)
 
-        sampling_points = theta_d2xy_coods(sampling_points, self.pc_range)
+        sampling_points = theta_d2xy_coods(
+            sampling_points, self.pc_range, preserve_extra=False)
         if getattr(self, '_deploy_trt_sampling_barriers', False):
             sampling_points = tensorrt_fusion_barrier(sampling_points)
                 
