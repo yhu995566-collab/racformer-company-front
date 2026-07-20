@@ -576,7 +576,8 @@ class BEVSampling(BaseModule):
         sampling_points[..., 0:1] = (sampling_points[..., 0:1] - self.pc_range[0]) / (self.pc_range[3] - self.pc_range[0])
         sampling_points[..., 1:2] = (sampling_points[..., 1:2] - self.pc_range[1]) / (self.pc_range[4] - self.pc_range[1])
         
-        sampling_points = xy2theta_d_coods(sampling_points, self.pc_range)
+        sampling_points = xy2theta_d_coods(
+            sampling_points, self.pc_range, preserve_extra=False)
         
         sampling_points = sampling_points.reshape(B, Q, self.num_frames, self.num_heads, self.num_points, self.depth_num, 2)
         depth_grid_cache = getattr(self, '_deploy_depth_grid_cache', None)

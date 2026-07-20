@@ -106,7 +106,9 @@ def theta_d2xy_coods(
     return torch.cat([xy_coords, theta_d_coords[..., 2:]], dim=-1)
 
 
-def xy2theta_d_coods(xy_coords_norm, pc_range=None, map_size=102.4, r=65.0, norm=True):
+def xy2theta_d_coods(
+        xy_coords_norm, pc_range=None, map_size=102.4, r=65.0, norm=True,
+        preserve_extra=True):
     xy_coords = xy_coords_norm.clone()
     if norm:
         if pc_range is None:
@@ -127,4 +129,6 @@ def xy2theta_d_coods(xy_coords_norm, pc_range=None, map_size=102.4, r=65.0, norm
         theta = torch.atan2(xy_coords[..., 1:2], xy_coords[..., 0:1])
         theta = ((theta + 2 * torch.pi) % (2 * torch.pi))
         theta_d_coods = torch.cat((theta, distances), dim=-1)        
+    if not preserve_extra or xy_coords_norm.shape[-1] == 2:
+        return theta_d_coods
     return torch.cat([theta_d_coods, xy_coords[..., 2:]], dim=-1)
