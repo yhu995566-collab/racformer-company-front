@@ -86,6 +86,10 @@ def main():
         'racformer_identity', '1', '')
     lines.append('racformer_identity plugin registered: {}'.format(
         identity_creator is not None))
+    msmv_creator = trt.get_plugin_registry().get_plugin_creator(
+        'racformer_msmv_sampling', '1', '')
+    lines.append('racformer_msmv_sampling plugin registered: {}'.format(
+        msmv_creator is not None))
     builder = trt.Builder(logger)
     explicit_batch = 1 << int(
         trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)

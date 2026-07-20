@@ -20,6 +20,10 @@ standard system paths, `-DTENSORRT_ROOT` can be omitted. For Jetson, rebuild on
 the device with its own TensorRT headers and target CUDA architecture; do not
 copy this x86_64 plugin binary to Jetson.
 
+The library registers the `bev_pool_v2`, `racformer_identity`, and
+`racformer_msmv_sampling` plugins. The MSMV plugin reuses the repository's
+FP32 multi-scale sampling CUDA forward kernel.
+
 Load the resulting library during parser audit:
 
 ```bash

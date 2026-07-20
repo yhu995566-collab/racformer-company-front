@@ -7,10 +7,12 @@
 #include <cstring>
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
+#ifndef RACFORMER_TRT_PLUGIN
 #include <torch/extension.h>
 #include <ATen/ATen.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <THC/THCAtomics.cuh>
+#endif
 
 #define CUDA_KERNEL_LOOP(i, n)                          \
   for (int i = blockIdx.x * blockDim.x + threadIdx.x;   \
@@ -349,12 +351,21 @@ void ms_deformable_im2col_cuda_c2345(
     const int num_views,
     const int num_query,
     const int num_point,
-    float* data_col) {
+    float* data_col
+#ifdef RACFORMER_TRT_PLUGIN
+    , cudaStream_t stream
+#endif
+    ) {
 
     const int num_kernels = batch_size * num_query * channels;
     const int num_threads = CUDA_NUM_THREADS;
 
-    ms_deformable_im2col_gpu_kernel_c2345 <<<GET_BLOCKS(num_kernels, num_threads), num_threads>>> (
+    ms_deformable_im2col_gpu_kernel_c2345
+#ifdef RACFORMER_TRT_PLUGIN
+        <<<GET_BLOCKS(num_kernels, num_threads), num_threads, 0, stream>>> (
+#else
+        <<<GET_BLOCKS(num_kernels, num_threads), num_threads>>> (
+#endif
         feat_c2, feat_c3, feat_c4, feat_c5, h_c2, w_c2, h_c3, w_c3, h_c4, w_c4, h_c5, w_c5,
         data_sampling_loc, data_attn_weight, batch_size, channels, num_views, num_query, num_point, data_col
     );
@@ -377,12 +388,21 @@ void ms_deformable_im2col_cuda_c45(
     const int num_views,
     const int num_query,
     const int num_point,
-    float* data_col) {
+    float* data_col
+#ifdef RACFORMER_TRT_PLUGIN
+    , cudaStream_t stream
+#endif
+    ) {
 
     const int num_kernels = batch_size * num_query * channels;
     const int num_threads = CUDA_NUM_THREADS;
 
-    ms_deformable_im2col_gpu_kernel_c45 <<<GET_BLOCKS(num_kernels, num_threads), num_threads>>> (
+    ms_deformable_im2col_gpu_kernel_c45
+#ifdef RACFORMER_TRT_PLUGIN
+        <<<GET_BLOCKS(num_kernels, num_threads), num_threads, 0, stream>>> (
+#else
+        <<<GET_BLOCKS(num_kernels, num_threads), num_threads>>> (
+#endif
         feat_c4, feat_c5, h_c4, w_c4, h_c5, w_c5,
         data_sampling_loc, data_attn_weight, batch_size, channels, num_views, num_query, num_point, data_col
     );
@@ -411,12 +431,21 @@ void ms_deformable_im2col_cuda_c23456(
     const int num_views,
     const int num_query,
     const int num_point,
-    float* data_col) {
+    float* data_col
+#ifdef RACFORMER_TRT_PLUGIN
+    , cudaStream_t stream
+#endif
+    ) {
 
     const int num_kernels = batch_size * num_query * channels;
     const int num_threads = CUDA_NUM_THREADS;
 
-    ms_deformable_im2col_gpu_kernel_c23456 <<<GET_BLOCKS(num_kernels, num_threads), num_threads>>> (
+    ms_deformable_im2col_gpu_kernel_c23456
+#ifdef RACFORMER_TRT_PLUGIN
+        <<<GET_BLOCKS(num_kernels, num_threads), num_threads, 0, stream>>> (
+#else
+        <<<GET_BLOCKS(num_kernels, num_threads), num_threads>>> (
+#endif
         feat_c2, feat_c3, feat_c4, feat_c5, feat_c6, h_c2, w_c2, h_c3, w_c3, h_c4, w_c4, h_c5, w_c5, h_c6, w_c6,
         data_sampling_loc, data_attn_weight, batch_size, channels, num_views, num_query, num_point, data_col
     );

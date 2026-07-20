@@ -48,6 +48,9 @@ def parse_args():
     parser.add_argument(
         '--mixing-chunk-size', type=int, default=32768,
         help='Output width of each deployment AdaptiveMixing projection')
+    parser.add_argument(
+        '--msmv-plugin', action='store_true',
+        help='Export the existing multi-scale sampling CUDA op as a TRT plugin')
     parser.add_argument('--out', required=True)
     parser.add_argument('--report', required=True)
     parser.add_argument(
@@ -106,13 +109,20 @@ def disable_gradient_checkpointing(model):
     return disabled
 
 
-def enable_standard_onnx_fallbacks(model, mixing_chunk_size):
+def enable_standard_onnx_fallbacks(
+        model, mixing_chunk_size, use_msmv_plugin):
     """Use traceable implementations instead of opaque CUDA autograd ops."""
     import models.csrc.wrapper as sampling_wrapper
     import models.racformer_transformer as transformer_module
 
-    sampling_wrapper.MSMV_CUDA = False
-    transformer_module.MSMV_CUDA = False
+    if use_msmv_plugin:
+        if not sampling_wrapper.MSMV_CUDA:
+            raise RuntimeError(
+                '--msmv-plugin requires the compiled MSMV CUDA extension')
+        transformer_module.MSMV_CUDA = True
+    else:
+        sampling_wrapper.MSMV_CUDA = False
+        transformer_module.MSMV_CUDA = False
     positional_cache_bytes = 0
     positional_cache_count = 0
     layernorm_barrier_count = 0
@@ -226,6 +236,7 @@ def main():
             'ONNX_FALLTHROUGH' if args.fallthrough else 'ONNX'),
         'constant folding: {}'.format(args.constant_folding),
         'AdaptiveMixing chunk size: {}'.format(args.mixing_chunk_size),
+        'MSMV TensorRT plugin: {}'.format(args.msmv_plugin),
         'output boundary: raw all_cls_scores + all_bbox_preds (decode excluded)',
     ]
     try:
@@ -267,7 +278,7 @@ def main():
             legacy_outputs = legacy_raw_outputs(runner.model, batch)
             cache_count, cache_bytes, layernorm_barrier_count = \
                 enable_standard_onnx_fallbacks(
-                    runner.model, args.mixing_chunk_size)
+                    runner.model, args.mixing_chunk_size, args.msmv_plugin)
             outputs = wrapper(*inputs)
         torch.cuda.synchronize(runner.device)
         report.extend(['', '=== PyTorch raw outputs ==='])

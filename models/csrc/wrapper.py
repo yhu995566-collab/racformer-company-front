@@ -12,6 +12,22 @@ except ImportError as e:
     MSMV_CUDA = False
 
 
+def _msmv_sampling_symbolic(g, *inputs):
+    output = g.op('mmdeploy::racformer_msmv_sampling', *inputs)
+    feature = inputs[0]
+    sampling_locations = inputs[-2]
+    try:
+        feature_sizes = feature.type().sizes()
+        sampling_sizes = sampling_locations.type().sizes()
+        output.setType(feature.type().with_sizes([
+            feature_sizes[0], sampling_sizes[1],
+            feature_sizes[4], sampling_sizes[2],
+        ]))
+    except (AttributeError, TypeError):
+        output.setType(feature.type())
+    return output
+
+
 def msmv_sampling_pytorch(mlvl_feats, sampling_locations, scale_weights):
     """
     value: [B, N, H1W1 + H2W2..., C]
@@ -92,6 +108,8 @@ def msmv_sampling_pytorch_v2(mlvl_feats, sampling_locations, scale_weights):
     return final.permute(0, 2, 1, 3)
 
 class MSMVSamplingC2345(torch.autograd.Function):
+    symbolic = staticmethod(_msmv_sampling_symbolic)
+
     @staticmethod
     def forward(ctx, feat_c2, feat_c3, feat_c4, feat_c5, sampling_locations, scale_weights):
         ctx.save_for_backward(feat_c2, feat_c3, feat_c4, feat_c5, sampling_locations, scale_weights)
@@ -114,6 +132,8 @@ class MSMVSamplingC2345(torch.autograd.Function):
         return grad_value_c2, grad_value_c3, grad_value_c4, grad_value_c5, grad_sampling_loc, grad_attn_weight
 
 class MSMVSamplingC45(torch.autograd.Function):
+    symbolic = staticmethod(_msmv_sampling_symbolic)
+
     @staticmethod
     def forward(ctx, feat_c4, feat_c5, sampling_locations, scale_weights):
         ctx.save_for_backward(feat_c4, feat_c5, sampling_locations, scale_weights)
@@ -136,6 +156,8 @@ class MSMVSamplingC45(torch.autograd.Function):
         return grad_value_c4, grad_value_c5, grad_sampling_loc, grad_attn_weight
     
 class MSMVSamplingC23456(torch.autograd.Function):
+    symbolic = staticmethod(_msmv_sampling_symbolic)
+
     @staticmethod
     def forward(ctx, feat_c2, feat_c3, feat_c4, feat_c5, feat_c6, sampling_locations, scale_weights):
         ctx.save_for_backward(feat_c2, feat_c3, feat_c4, feat_c5, feat_c6, sampling_locations, scale_weights)
