@@ -688,8 +688,23 @@ class AdaptiveMixing(nn.Module):
         assert C == self.eff_in_dim
 
         '''generate mixing parameters'''
-        params = self.parameter_generator(query)
-        if getattr(self, '_deploy_trt_mixing_barriers', False):
+        parameter_chunk_size = getattr(
+            self, '_deploy_trt_parameter_chunk_size', None)
+        if parameter_chunk_size is None:
+            params = self.parameter_generator(query)
+        else:
+            weight_chunks = self.parameter_generator.weight.split(
+                parameter_chunk_size, dim=0)
+            bias_chunks = self.parameter_generator.bias.split(
+                parameter_chunk_size, dim=0)
+            params = []
+            for weight, bias in zip(weight_chunks, bias_chunks):
+                chunk = F.linear(query, weight, bias)
+                chunk = tensorrt_fusion_barrier(chunk)
+                params.append(chunk)
+            params = torch.cat(params, dim=-1)
+        if (getattr(self, '_deploy_trt_mixing_barriers', False)
+                and parameter_chunk_size is None):
             params = tensorrt_fusion_barrier(params)
         params = params.reshape(B*Q, G, -1)
         out = x.reshape(B*Q, G, P, C)

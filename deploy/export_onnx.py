@@ -129,6 +129,7 @@ def enable_standard_onnx_fallbacks(model):
             module._deploy_trt_sampling_barriers = True
         if module.__class__.__name__ == 'AdaptiveMixing':
             module._deploy_trt_mixing_barriers = True
+            module._deploy_trt_parameter_chunk_size = 4096
         if module.__class__.__name__ == 'ScaleAdaptiveSelfAttention':
             module._deploy_vectorized_bbox_dist = True
         if isinstance(module, torch.nn.LayerNorm):
