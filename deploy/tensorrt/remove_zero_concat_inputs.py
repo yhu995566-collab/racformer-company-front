@@ -42,6 +42,34 @@ def find_zero_dim_tensors(network):
     return tensors, shape_tensors
 
 
+def find_onnx_shape_parameter_tensors(model):
+    producer_types = {
+        output: node.op_type
+        for node in model.graph.node
+        for output in node.output
+    }
+    uses = {}
+    for node in model.graph.node:
+        for input_index, name in enumerate(node.input):
+            uses.setdefault(name, []).append((node.op_type, input_index))
+
+    shape_inputs = {
+        'ConstantOfShape': {0},
+        'Expand': {1},
+        'Reshape': {1},
+        'Slice': {1, 2, 3, 4},
+        'Tile': {1},
+    }
+    return {
+        name for name, producer_type in producer_types.items()
+        if producer_type == 'Shape'
+        and uses.get(name)
+        and all(
+            input_index in shape_inputs.get(op_type, set())
+            for op_type, input_index in uses[name])
+    }
+
+
 def main():
     args = parse_args()
     lines = [
@@ -71,7 +99,11 @@ def main():
                     index, parser.get_error(index)))
             raise RuntimeError('TensorRT could not parse the ONNX graph')
 
+        model = onnx.load(args.onnx, load_external_data=True)
         zero_tensors, zero_shape_tensors = find_zero_dim_tensors(network)
+        semantic_shape_names = find_onnx_shape_parameter_tensors(model)
+        for name in set(zero_tensors) & semantic_shape_names:
+            zero_shape_tensors[name] = zero_tensors.pop(name)
         lines.append('zero-dimension execution tensors found: {}'.format(
             len(zero_tensors)))
         lines.append('zero-length shape tensors ignored: {}'.format(
@@ -82,7 +114,6 @@ def main():
                 '{} shape={} producer=layer {} {!r}'.format(
                     name, shape, layer_index, layer_name))
 
-        model = onnx.load(args.onnx, load_external_data=True)
         removals = []
         unresolved = []
         for node in model.graph.node:

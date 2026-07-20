@@ -80,6 +80,37 @@ def find_zero_dim_tensors(network):
     return tensors, shape_tensors, producers, consumers
 
 
+def find_onnx_shape_parameter_tensors(path):
+    import onnx
+
+    model = onnx.load(path, load_external_data=False)
+    producer_types = {
+        output: node.op_type
+        for node in model.graph.node
+        for output in node.output
+    }
+    uses = {}
+    for node in model.graph.node:
+        for input_index, name in enumerate(node.input):
+            uses.setdefault(name, []).append((node.op_type, input_index))
+
+    shape_inputs = {
+        'ConstantOfShape': {0},
+        'Expand': {1},
+        'Reshape': {1},
+        'Slice': {1, 2, 3, 4},
+        'Tile': {1},
+    }
+    return {
+        name for name, producer_type in producer_types.items()
+        if producer_type == 'Shape'
+        and uses.get(name)
+        and all(
+            input_index in shape_inputs.get(op_type, set())
+            for op_type, input_index in uses[name])
+    }
+
+
 def main():
     args = parse_args()
     lines = [
@@ -150,6 +181,10 @@ def main():
 
         zero_dim_tensors, zero_dim_shape_tensors, producers, consumers = \
             find_zero_dim_tensors(network)
+        semantic_shape_names = find_onnx_shape_parameter_tensors(
+            os.path.abspath(args.onnx))
+        for name in set(zero_dim_tensors) & semantic_shape_names:
+            zero_dim_shape_tensors[name] = zero_dim_tensors.pop(name)
         lines.extend([
             '', '=== Zero-dimension tensor audit ===',
             'zero-dimension tensors: {}'.format(
