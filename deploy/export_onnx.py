@@ -276,6 +276,10 @@ def main():
 
         with torch.no_grad():
             legacy_outputs = legacy_raw_outputs(runner.model, batch)
+            torch.cuda.synchronize(runner.device)
+            legacy_outputs = tuple(
+                tensor.detach().clone() for tensor in legacy_outputs)
+            torch.cuda.synchronize(runner.device)
             cache_count, cache_bytes, layernorm_barrier_count = \
                 enable_standard_onnx_fallbacks(
                     runner.model, args.mixing_chunk_size, args.msmv_plugin)
