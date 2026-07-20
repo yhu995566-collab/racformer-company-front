@@ -693,13 +693,14 @@ class AdaptiveMixing(nn.Module):
         if parameter_chunk_size is None:
             params = self.parameter_generator(query)
         else:
+            projection_query = tensorrt_fusion_barrier(query)
             weight_chunks = self.parameter_generator.weight.split(
                 parameter_chunk_size, dim=0)
             bias_chunks = self.parameter_generator.bias.split(
                 parameter_chunk_size, dim=0)
             params = []
             for weight, bias in zip(weight_chunks, bias_chunks):
-                chunk = F.linear(query, weight, bias)
+                chunk = F.linear(projection_query, weight, bias)
                 chunk = tensorrt_fusion_barrier(chunk)
                 params.append(chunk)
             params = torch.cat(params, dim=-1)
