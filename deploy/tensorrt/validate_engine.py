@@ -23,6 +23,10 @@ def parse_args():
     parser.add_argument(
         '--decode-config',
         help='Optional model config used to compare final decoded detections')
+    parser.add_argument(
+        '--accept-decoded-match', action='store_true',
+        help='Accept the engine when decoded boxes, scores, and labels match '
+             'even if diagnostic raw tensors exceed atol')
     return parser.parse_args()
 
 
@@ -194,6 +198,7 @@ def main():
 
         lines.extend(['', '=== Numerical comparison ==='])
         comparison_passed = True
+        decoded_comparison_passed = None
         actual_outputs = {}
         for name in output_names:
             if name not in fixture:
@@ -230,6 +235,8 @@ def main():
             scores_match = actual_scores.shape == ref_scores.shape and np.allclose(
                 actual_scores, ref_scores, rtol=0.0, atol=args.atol)
             labels_match = np.array_equal(actual_labels, ref_labels)
+            decoded_comparison_passed = (
+                boxes_match and scores_match and labels_match)
             lines.extend([
                 '', '=== Decoded detection comparison ===',
                 'actual/reference detection count: {}/{}'.format(
@@ -244,7 +251,7 @@ def main():
                     if actual_scores.shape == ref_scores.shape else float('inf')),
                 'labels equal: {}'.format(labels_match),
                 'decoded comparison passed: {}'.format(
-                    boxes_match and scores_match and labels_match),
+                    decoded_comparison_passed),
             ])
         lines.extend([
             'atol: {}'.format(args.atol),
@@ -260,7 +267,17 @@ def main():
             'PyTorch I/O max_memory_reserved: {:.2f} MB'.format(
                 torch.cuda.max_memory_reserved(device) / (1024 ** 2)),
         ])
-        if not comparison_passed:
+        accepted = comparison_passed or (
+            args.accept_decoded_match and decoded_comparison_passed is True)
+        lines.extend([
+            '', '=== Acceptance ===',
+            'raw tensor comparison passed: {}'.format(comparison_passed),
+            'decoded comparison passed: {}'.format(
+                decoded_comparison_passed),
+            'accept decoded match: {}'.format(args.accept_decoded_match),
+            'deployment acceptance passed: {}'.format(accepted),
+        ])
+        if not accepted:
             raise RuntimeError('TensorRT output comparison failed')
         lines.extend(['', 'status: SUCCESS'])
     except Exception as error:
