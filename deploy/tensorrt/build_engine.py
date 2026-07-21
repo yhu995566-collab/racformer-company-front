@@ -25,6 +25,10 @@ def parse_args():
         help='Keep floating-point layers whose names contain this substring '
              'in FP32; may be repeated and requires --fp16')
     parser.add_argument(
+        '--fp32-layer-exclude-pattern', action='append', default=[],
+        help='Exclude matching layer names from --fp32-layer-pattern; may be '
+             'repeated')
+    parser.add_argument(
         '--builder-optimization-level', type=int, choices=range(6),
         help='TensorRT builder optimization level (0-5)')
     parser.add_argument(
@@ -51,6 +55,9 @@ def main():
         raise ValueError('voxel profile must satisfy 0 < min <= opt <= max')
     if args.fp32_layer_pattern and not args.fp16:
         raise ValueError('--fp32-layer-pattern requires --fp16')
+    if args.fp32_layer_exclude_pattern and not args.fp32_layer_pattern:
+        raise ValueError(
+            '--fp32-layer-exclude-pattern requires --fp32-layer-pattern')
 
     import tensorrt as trt
 
@@ -96,11 +103,17 @@ def main():
             raise RuntimeError('TensorRT could not parse the ONNX graph')
 
         constrained_layers = []
+        excluded_layers = []
         for index in range(network.num_layers):
             layer = network.get_layer(index)
             if not any(
                     pattern in layer.name
                     for pattern in args.fp32_layer_pattern):
+                continue
+            if any(
+                    pattern in layer.name
+                    for pattern in args.fp32_layer_exclude_pattern):
+                excluded_layers.append((index, layer.name))
                 continue
             floating_outputs = [
                 output_index for output_index in range(layer.num_outputs)
@@ -120,6 +133,9 @@ def main():
             lines.extend([
                 'FP32 layer patterns: {}'.format(
                     args.fp32_layer_pattern),
+                'FP32 layer exclusion patterns: {}'.format(
+                    args.fp32_layer_exclude_pattern),
+                'FP32 excluded layers: {}'.format(len(excluded_layers)),
                 'FP32 constrained layers: {}'.format(
                     len(constrained_layers)),
             ])
