@@ -153,7 +153,10 @@ def main():
                 raise RuntimeError('TensorRT reports no fast FP16 support')
             config.set_flag(trt.BuilderFlag.FP16)
             if constrained_layers:
-                config.set_flag(trt.BuilderFlag.OBEY_PRECISION_CONSTRAINTS)
+                config.set_flag(trt.BuilderFlag.PREFER_PRECISION_CONSTRAINTS)
+                lines.append(
+                    'precision constraints: prefer '
+                    '(fall back when a layer has no FP32 implementation)')
             lines.append(
                 'precision mode: mixed FP16/FP32 '
                 '(FP32-only plugins remain FP32)')
