@@ -52,6 +52,33 @@ def torch_dtype(trt, dtype):
     return mapping[dtype]
 
 
+def append_comparison_details(lines, name, actual, reference, atol):
+    difference = np.abs(actual - reference)
+    flat = difference.reshape(-1)
+    max_index = np.unravel_index(int(flat.argmax()), difference.shape)
+    lines.extend([
+        '{} error percentiles: p50={:.8f}, p95={:.8f}, p99={:.8f}, '
+        'p99.9={:.8f}'.format(
+            name, np.percentile(flat, 50), np.percentile(flat, 95),
+            np.percentile(flat, 99), np.percentile(flat, 99.9)),
+        '{} elements above atol: {}/{} ({:.6f}%)'.format(
+            name, int((flat > atol).sum()), flat.size,
+            100.0 * float((flat > atol).sum()) / flat.size),
+        '{} max error index: {}, actual={:.8f}, reference={:.8f}'.format(
+            name, max_index, float(actual[max_index]),
+            float(reference[max_index])),
+    ])
+    if difference.ndim >= 1:
+        for layer_index in range(difference.shape[0]):
+            layer_error = difference[layer_index].reshape(-1)
+            lines.append(
+                '{} layer {}: max={:.8f}, mean={:.8f}, p99={:.8f}, '
+                'above_atol={}/{}'.format(
+                    name, layer_index, layer_error.max(), layer_error.mean(),
+                    np.percentile(layer_error, 99),
+                    int((layer_error > atol).sum()), layer_error.size))
+
+
 def main():
     args = parse_args()
     if args.warmup < 0 or args.iters <= 0:
@@ -155,6 +182,8 @@ def main():
                 'mean_abs_error={:.8f}'.format(
                     name, actual.shape, close, difference.max(),
                     difference.mean()))
+            append_comparison_details(
+                lines, name, actual, reference, args.atol)
         lines.extend([
             'atol: {}'.format(args.atol),
             'comparison passed: {}'.format(comparison_passed),
