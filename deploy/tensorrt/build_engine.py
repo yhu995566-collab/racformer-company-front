@@ -21,6 +21,10 @@ def parse_args():
         '--fp16', action='store_true',
         help='Allow FP16 tactics; FP32-only plugins remain FP32')
     parser.add_argument(
+        '--fp32-layer-pattern', action='append', default=[],
+        help='Keep floating-point layers whose names contain this substring '
+             'in FP32; may be repeated and requires --fp16')
+    parser.add_argument(
         '--builder-optimization-level', type=int, choices=range(6),
         help='TensorRT builder optimization level (0-5)')
     parser.add_argument(
@@ -45,6 +49,8 @@ def main():
     args = parse_args()
     if not (0 < args.min_voxels <= args.opt_voxels <= args.max_voxels):
         raise ValueError('voxel profile must satisfy 0 < min <= opt <= max')
+    if args.fp32_layer_pattern and not args.fp16:
+        raise ValueError('--fp32-layer-pattern requires --fp16')
 
     import tensorrt as trt
 
@@ -89,6 +95,35 @@ def main():
                     index, parser.get_error(index)))
             raise RuntimeError('TensorRT could not parse the ONNX graph')
 
+        constrained_layers = []
+        for index in range(network.num_layers):
+            layer = network.get_layer(index)
+            if not any(
+                    pattern in layer.name
+                    for pattern in args.fp32_layer_pattern):
+                continue
+            floating_outputs = [
+                output_index for output_index in range(layer.num_outputs)
+                if layer.get_output(output_index) is not None and
+                layer.get_output(output_index).dtype == trt.float32
+            ]
+            if not floating_outputs:
+                continue
+            layer.precision = trt.float32
+            for output_index in floating_outputs:
+                layer.set_output_type(output_index, trt.float32)
+            constrained_layers.append((index, layer.name))
+        if args.fp32_layer_pattern:
+            if not constrained_layers:
+                raise RuntimeError(
+                    'FP32 layer patterns matched no floating-point layers')
+            lines.extend([
+                'FP32 layer patterns: {}'.format(
+                    args.fp32_layer_pattern),
+                'FP32 constrained layers: {}'.format(
+                    len(constrained_layers)),
+            ])
+
         for pattern in args.fusion_break_before:
             matches = []
             for index in range(network.num_layers):
@@ -117,6 +152,8 @@ def main():
             if not builder.platform_has_fast_fp16:
                 raise RuntimeError('TensorRT reports no fast FP16 support')
             config.set_flag(trt.BuilderFlag.FP16)
+            if constrained_layers:
+                config.set_flag(trt.BuilderFlag.OBEY_PRECISION_CONSTRAINTS)
             lines.append(
                 'precision mode: mixed FP16/FP32 '
                 '(FP32-only plugins remain FP32)')
