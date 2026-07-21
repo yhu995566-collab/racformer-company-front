@@ -3,6 +3,7 @@
 
 import argparse
 import ctypes
+import importlib
 import os
 
 import numpy as np
@@ -19,6 +20,9 @@ def parse_args():
     parser.add_argument('--warmup', type=int, default=10)
     parser.add_argument('--iters', type=int, default=50)
     parser.add_argument('--atol', type=float, default=5e-3)
+    parser.add_argument(
+        '--decode-config',
+        help='Optional model config used to compare final decoded detections')
     return parser.parse_args()
 
 
@@ -77,6 +81,27 @@ def append_comparison_details(lines, name, actual, reference, atol):
                     name, layer_index, layer_error.max(), layer_error.mean(),
                     np.percentile(layer_error, 99),
                     int((layer_error > atol).sum()), layer_error.size))
+
+
+def decode_detections(config_path, cls_scores, bbox_preds, device):
+    from mmcv import Config
+    from mmdet.core.bbox.builder import build_bbox_coder
+
+    importlib.import_module('models')
+    cfg = Config.fromfile(config_path)
+    coder = build_bbox_coder(cfg.model.pts_bbox_head.bbox_coder)
+    predictions = coder.decode({
+        'all_cls_scores': torch.from_numpy(
+            np.ascontiguousarray(cls_scores)).to(device=device),
+        'all_bbox_preds': torch.from_numpy(
+            np.ascontiguousarray(bbox_preds)).to(device=device),
+    })[0]
+    boxes = predictions['bboxes'].detach().cpu().numpy().copy()
+    boxes[:, 2] -= boxes[:, 5] * 0.5
+    return (
+        boxes,
+        predictions['scores'].detach().cpu().numpy(),
+        predictions['labels'].detach().cpu().numpy())
 
 
 def main():
@@ -169,11 +194,13 @@ def main():
 
         lines.extend(['', '=== Numerical comparison ==='])
         comparison_passed = True
+        actual_outputs = {}
         for name in output_names:
             if name not in fixture:
                 raise KeyError('fixture is missing reference {}'.format(name))
             actual = tensors[name].detach().cpu().numpy()
             reference = fixture[name]
+            actual_outputs[name] = actual
             difference = np.abs(actual - reference)
             close = np.allclose(actual, reference, rtol=0.0, atol=args.atol)
             comparison_passed = comparison_passed and close
@@ -184,6 +211,41 @@ def main():
                     difference.mean()))
             append_comparison_details(
                 lines, name, actual, reference, args.atol)
+        if args.decode_config:
+            required_outputs = {'all_cls_scores', 'all_bbox_preds'}
+            if not required_outputs.issubset(actual_outputs):
+                raise RuntimeError(
+                    'decoded comparison requires {}'.format(
+                        sorted(required_outputs)))
+            actual_decoded = decode_detections(
+                args.decode_config, actual_outputs['all_cls_scores'],
+                actual_outputs['all_bbox_preds'], device)
+            reference_decoded = decode_detections(
+                args.decode_config, fixture['all_cls_scores'],
+                fixture['all_bbox_preds'], device)
+            actual_boxes, actual_scores, actual_labels = actual_decoded
+            ref_boxes, ref_scores, ref_labels = reference_decoded
+            boxes_match = actual_boxes.shape == ref_boxes.shape and np.allclose(
+                actual_boxes, ref_boxes, rtol=0.0, atol=args.atol)
+            scores_match = actual_scores.shape == ref_scores.shape and np.allclose(
+                actual_scores, ref_scores, rtol=0.0, atol=args.atol)
+            labels_match = np.array_equal(actual_labels, ref_labels)
+            lines.extend([
+                '', '=== Decoded detection comparison ===',
+                'actual/reference detection count: {}/{}'.format(
+                    len(actual_boxes), len(ref_boxes)),
+                'boxes close: {}, max_abs_error={:.8f}'.format(
+                    boxes_match,
+                    np.abs(actual_boxes - ref_boxes).max()
+                    if actual_boxes.shape == ref_boxes.shape else float('inf')),
+                'scores close: {}, max_abs_error={:.8f}'.format(
+                    scores_match,
+                    np.abs(actual_scores - ref_scores).max()
+                    if actual_scores.shape == ref_scores.shape else float('inf')),
+                'labels equal: {}'.format(labels_match),
+                'decoded comparison passed: {}'.format(
+                    boxes_match and scores_match and labels_match),
+            ])
         lines.extend([
             'atol: {}'.format(args.atol),
             'comparison passed: {}'.format(comparison_passed),
