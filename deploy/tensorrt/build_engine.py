@@ -123,8 +123,6 @@ def main():
             if not floating_outputs:
                 continue
             layer.precision = trt.float32
-            for output_index in floating_outputs:
-                layer.set_output_type(output_index, trt.float32)
             constrained_layers.append((index, layer.name))
         if args.fp32_layer_pattern:
             if not constrained_layers:
@@ -138,6 +136,8 @@ def main():
                 'FP32 excluded layers: {}'.format(len(excluded_layers)),
                 'FP32 constrained layers: {}'.format(
                     len(constrained_layers)),
+                'FP32 constraint scope: compute precision only '
+                '(intermediate output types remain unconstrained)',
             ])
 
         for pattern in args.fusion_break_before:
