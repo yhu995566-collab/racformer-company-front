@@ -8,11 +8,13 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(TENSORRT_ROOT "" CACHE PATH "TensorRT root containing include/ and lib/")
 find_path(TENSORRT_INCLUDE_DIR NvInfer.h
   HINTS ${TENSORRT_ROOT}/include $ENV{TENSORRT_ROOT}/include
-        $ENV{CONDA_PREFIX}/include /usr/include/x86_64-linux-gnu /usr/include)
+        $ENV{CONDA_PREFIX}/include /usr/include/x86_64-linux-gnu
+        /usr/include/aarch64-linux-gnu /usr/include)
 find_library(TENSORRT_NVINFER_LIBRARY nvinfer
   HINTS ${TENSORRT_ROOT}/lib ${TENSORRT_ROOT}/lib64
         $ENV{TENSORRT_ROOT}/lib $ENV{TENSORRT_ROOT}/lib64
-        $ENV{CONDA_PREFIX}/lib /usr/lib/x86_64-linux-gnu /usr/lib)
+        $ENV{CONDA_PREFIX}/lib /usr/lib/x86_64-linux-gnu
+        /usr/lib/aarch64-linux-gnu /usr/lib)
 find_package(CUDAToolkit REQUIRED)
 
 if(NOT TENSORRT_INCLUDE_DIR OR NOT TENSORRT_NVINFER_LIBRARY)

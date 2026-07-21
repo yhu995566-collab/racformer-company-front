@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a fixed-batch FP32 RaCFormer TensorRT engine."""
+"""Build a fixed-batch RaCFormer TensorRT engine."""
 
 import argparse
 import ctypes
@@ -17,6 +17,9 @@ def parse_args():
     parser.add_argument('--opt-voxels', type=int, default=1024)
     parser.add_argument('--max-voxels', type=int, default=4096)
     parser.add_argument('--workspace-gb', type=float, default=8.0)
+    parser.add_argument(
+        '--fp16', action='store_true',
+        help='Allow FP16 tactics; FP32-only plugins remain FP32')
     parser.add_argument(
         '--builder-optimization-level', type=int, choices=range(6),
         help='TensorRT builder optimization level (0-5)')
@@ -59,7 +62,7 @@ def main():
             print(entry, flush=True)
 
     lines = [
-        '=== RaCFormer FP32 TensorRT engine build ===',
+        '=== RaCFormer TensorRT engine build ===',
         'TensorRT version: {}'.format(trt.__version__),
         'onnx: {}'.format(os.path.abspath(args.onnx)),
         'engine: {}'.format(os.path.abspath(args.engine)),
@@ -110,6 +113,15 @@ def main():
 
         config = builder.create_builder_config()
         config.clear_flag(trt.BuilderFlag.TF32)
+        if args.fp16:
+            if not builder.platform_has_fast_fp16:
+                raise RuntimeError('TensorRT reports no fast FP16 support')
+            config.set_flag(trt.BuilderFlag.FP16)
+            lines.append(
+                'precision mode: mixed FP16/FP32 '
+                '(FP32-only plugins remain FP32)')
+        else:
+            lines.append('precision mode: strict FP32 (TF32 disabled)')
         if args.builder_optimization_level is not None:
             if not hasattr(config, 'builder_optimization_level'):
                 raise RuntimeError(
@@ -169,7 +181,9 @@ def main():
             stream.write(serialized)
         lines.extend([
             '', '=== Build result ===', 'status: SUCCESS',
-            'precision: strict FP32 (TF32 disabled)',
+            'precision: {}'.format(
+                'mixed FP16/FP32' if args.fp16
+                else 'strict FP32 (TF32 disabled)'),
             'build time: {:.3f} s'.format(elapsed),
             'engine size: {:.2f} MB'.format(
                 os.path.getsize(engine_path) / (1024 ** 2)),

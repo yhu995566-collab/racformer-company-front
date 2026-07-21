@@ -115,7 +115,7 @@ def main():
     import tensorrt as trt
 
     lines = [
-        '=== RaCFormer TensorRT FP32 validation ===',
+        '=== RaCFormer TensorRT validation ===',
         'TensorRT version: {}'.format(trt.__version__),
         'engine: {}'.format(os.path.abspath(args.engine)),
         'fixture: {}'.format(os.path.abspath(args.fixture)),
