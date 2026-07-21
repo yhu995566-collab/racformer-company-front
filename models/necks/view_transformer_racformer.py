@@ -289,6 +289,16 @@ class LSSViewTransformer_racformer(BaseModule):
             feat = feat.permute(0, 1, 3, 4, 2) # (B, N, H, W, self.out_channels)
             
             depth = depth.view(B, N, self.D, H, W)
+            if torch.onnx.is_in_onnx_export():
+                export_depth = depth.reshape(-1, self.D, H, W)
+                export_feat = feat.reshape(
+                    -1, H, W, self.out_channels)
+                bev_feat = TRTBEVPoolv2.apply(
+                    export_depth, export_feat, self.ranks_depth,
+                    self.ranks_feat, self.ranks_bev,
+                    self.interval_starts, self.interval_lengths,
+                    int(self.grid_size[1]), int(self.grid_size[0]))
+                return bev_feat.permute(0, 3, 1, 2).contiguous(), depth_digit
             bev_feat_shape = (depth.shape[0], int(self.grid_size[2]),
                               int(self.grid_size[1]), int(self.grid_size[0]),
                               feat.shape[-1])  # (B, Z, Y, X, C)

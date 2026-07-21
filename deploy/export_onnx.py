@@ -55,6 +55,10 @@ def parse_args():
         '--single-camera-projection-plugin', action='store_true',
         help='Export single-camera projection and coordinate packing as a '
              'TensorRT plugin')
+    parser.add_argument(
+        '--fixed-view-geometry', action='store_true',
+        help='Precompute BEV pooling ranks after verifying that all frame '
+             'camera-to-ego transforms are identical')
     parser.add_argument('--out', required=True)
     parser.add_argument('--report', required=True)
     parser.add_argument(
@@ -186,6 +190,24 @@ def enable_standard_onnx_fallbacks(
         layernorm_barrier_count)
 
 
+def enable_fixed_view_geometry(model, img2lidar, atol=1e-6):
+    """Enable the existing BEVPool acceleration for fixed vehicle calibration."""
+    matrices = img2lidar.detach()
+    if matrices.ndim != 4 or matrices.shape[0] != 1:
+        raise RuntimeError(
+            'fixed view geometry requires img2lidar shape [1, frames, 4, 4]')
+    reference = matrices[:, :1].expand_as(matrices)
+    max_error = (matrices - reference).abs().max().item()
+    if not torch.allclose(matrices, reference, rtol=0.0, atol=atol):
+        raise RuntimeError(
+            'fixed view geometry requires identical frame transforms; '
+            'maximum img2lidar difference is {:.8f}'.format(max_error))
+    view_transformer = model.img_lss_view_transformer
+    view_transformer.accelerate = True
+    view_transformer.initial_flag = True
+    return max_error
+
+
 def install_export_symbolics(opset):
     """Install compatibility symbolics missing from the PyTorch 2.0 exporter."""
     from torch.onnx import register_custom_op_symbolic
@@ -255,6 +277,7 @@ def main():
         'MSMV TensorRT plugin: {}'.format(args.msmv_plugin),
         'single-camera projection TensorRT plugin: {}'.format(
             args.single_camera_projection_plugin),
+        'fixed view geometry: {}'.format(args.fixed_view_geometry),
         'output boundary: raw all_cls_scores + all_bbox_preds (decode excluded)',
     ]
     try:
@@ -305,6 +328,10 @@ def main():
                 enable_standard_onnx_fallbacks(
                     runner.model, args.mixing_chunk_size, args.msmv_plugin,
                     args.single_camera_projection_plugin)
+            fixed_geometry_error = None
+            if args.fixed_view_geometry:
+                fixed_geometry_error = enable_fixed_view_geometry(
+                    runner.model, inputs[4])
             outputs = wrapper(*inputs)
         torch.cuda.synchronize(runner.device)
         report.extend(['', '=== PyTorch raw outputs ==='])
@@ -318,6 +345,15 @@ def main():
             'TensorRT LayerNorm input barriers: {}'.format(
                 layernorm_barrier_count),
         ])
+        if fixed_geometry_error is not None:
+            report.extend([
+                'fixed view geometry frame max error: {:.8f}'.format(
+                    fixed_geometry_error),
+                'fixed BEV rank count: {}'.format(
+                    runner.model.img_lss_view_transformer.ranks_bev.numel()),
+                'fixed BEV interval count: {}'.format(
+                    runner.model.img_lss_view_transformer.interval_starts.numel()),
+            ])
         report.extend(['', '=== Tensor metadata boundary check ==='])
         boundary_passed = True
         for name, legacy, current in zip(
