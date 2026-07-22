@@ -59,6 +59,9 @@ def parse_args():
         '--fixed-view-geometry', action='store_true',
         help='Precompute BEV pooling ranks after verifying that all frame '
              'camera-to-ego transforms are identical')
+    parser.add_argument(
+        '--tensorrt-85-compat', action='store_true',
+        help='Decompose IsInf and LayerNormalization for TensorRT 8.5')
     parser.add_argument('--out', required=True)
     parser.add_argument('--report', required=True)
     parser.add_argument(
@@ -208,7 +211,7 @@ def enable_fixed_view_geometry(model, img2lidar, atol=1e-6):
     return max_error
 
 
-def install_export_symbolics(opset):
+def install_export_symbolics(opset, tensorrt_85_compat=False):
     """Install compatibility symbolics missing from the PyTorch 2.0 exporter."""
     from torch.onnx import register_custom_op_symbolic
     from torch.onnx import symbolic_helper
@@ -258,8 +261,40 @@ def install_export_symbolics(opset):
             g.op('Where', g.op('Less', y, zero), g.op('Neg', half_pi), zero))
         return g.op('Where', g.op('Equal', x, zero), vertical, angle)
 
+    def isinf(g, value):
+        max_float = g.op(
+            'Constant', value_t=torch.tensor(
+                torch.finfo(torch.float32).max, dtype=torch.float32))
+        return g.op('Greater', g.op('Abs', value), max_float)
+
+    @symbolic_helper.parse_args('v', 'is', 'v', 'v', 'f', 'i')
+    def layer_norm(g, value, normalized_shape, weight, bias, eps,
+                   cudnn_enable):
+        del cudnn_enable
+        axes = list(range(-len(normalized_shape), 0))
+        mean = g.op(
+            'ReduceMean', value, axes_i=axes, keepdims_i=1)
+        centered = g.op('Sub', value, mean)
+        variance = g.op(
+            'ReduceMean', g.op('Mul', centered, centered),
+            axes_i=axes, keepdims_i=1)
+        epsilon = g.op(
+            'Constant', value_t=torch.tensor(eps, dtype=torch.float32))
+        normalized = g.op(
+            'Div', centered,
+            g.op('Sqrt', g.op('Add', variance, epsilon)))
+        if not symbolic_helper._is_none(weight):
+            normalized = g.op('Mul', normalized, weight)
+        if not symbolic_helper._is_none(bias):
+            normalized = g.op('Add', normalized, bias)
+        return normalized
+
     register_custom_op_symbolic('aten::cat', diagnostic_cat, int(opset))
     register_custom_op_symbolic('aten::atan2', atan2, int(opset))
+    if tensorrt_85_compat:
+        register_custom_op_symbolic('aten::isinf', isinf, int(opset))
+        register_custom_op_symbolic(
+            'aten::layer_norm', layer_norm, int(opset))
 
 
 def main():
@@ -278,6 +313,7 @@ def main():
         'single-camera projection TensorRT plugin: {}'.format(
             args.single_camera_projection_plugin),
         'fixed view geometry: {}'.format(args.fixed_view_geometry),
+        'TensorRT 8.5 compatibility: {}'.format(args.tensorrt_85_compat),
         'output boundary: raw all_cls_scores + all_bbox_preds (decode excluded)',
     ]
     try:
@@ -398,7 +434,7 @@ def main():
                 'radar_num_points_{}'.format(index): {0: voxel_count},
                 'radar_coors_{}'.format(index): {0: voxel_count},
             })
-        install_export_symbolics(args.opset)
+        install_export_symbolics(args.opset, args.tensorrt_85_compat)
         torch.onnx.export(
             wrapper,
             inputs,
