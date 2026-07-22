@@ -447,6 +447,25 @@ def main():
             dynamic_axes=dynamic_axes,
             operator_export_type=operator_type,
             verbose=False)
+        if args.tensorrt_85_compat:
+            from deploy.tensorrt.rewrite_trt85_onnx import \
+                rewrite_trt85_unsupported_nodes
+            rewrite_result = rewrite_trt85_unsupported_nodes(
+                output_path, output_path)
+            report.extend([
+                '', '=== TensorRT 8.5 ONNX rewrite ===',
+                'IsInf nodes rewritten: {}'.format(
+                    rewrite_result['isinf_rewritten']),
+                'IsInf nodes remaining: {}'.format(
+                    rewrite_result['isinf_remaining']),
+                'LayerNormalization nodes remaining: {}'.format(
+                    rewrite_result['layernorm_remaining']),
+                'onnx checker: {}'.format(rewrite_result['onnx_checker']),
+            ])
+            if (rewrite_result['isinf_remaining'] or
+                    rewrite_result['layernorm_remaining']):
+                raise RuntimeError(
+                    'TensorRT 8.5 unsupported operators remain after rewrite')
         report.extend([
             '', '=== Export result ===', 'status: SUCCESS',
             'onnx: {}'.format(output_path),
