@@ -7,6 +7,7 @@ import importlib
 import os
 import sys
 import traceback
+import types
 
 import numpy as np
 
@@ -211,6 +212,40 @@ def enable_fixed_view_geometry(model, img2lidar, atol=1e-6):
     return max_error
 
 
+def enable_single_batch_radar_scatter(model):
+    """Avoid the generic batch mask and its dynamic ONNX NonZero shape."""
+    middle_encoder = model.radar_middle_encoder
+    if middle_encoder.__class__.__name__ != 'PointPillarsScatter':
+        raise RuntimeError(
+            'TensorRT 8.5 radar scatter requires PointPillarsScatter, got {}'
+            .format(middle_encoder.__class__.__name__))
+    height, width = model.radar_output_shape
+    channels = model.radar_middle_channels
+
+    def single_batch_forward(module, voxel_features, coors, batch_size):
+        del module
+        if batch_size != 1:
+            raise RuntimeError(
+                'TensorRT 8.5 radar scatter requires batch_size=1')
+        if voxel_features.dim() != 2:
+            raise RuntimeError(
+                'radar voxel features must have shape [voxels, channels]')
+        linear_indices = (
+            coors[:, -2] * int(width) + coors[:, -1]).to(torch.long)
+        scatter_indices = linear_indices.unsqueeze(0).expand(
+            int(channels), -1)
+        canvas = voxel_features.new_zeros(
+            (int(channels), int(height) * int(width)))
+        canvas = canvas.scatter(
+            1, scatter_indices, voxel_features.transpose(0, 1))
+        return canvas.reshape(
+            1, int(channels), int(height), int(width))
+
+    middle_encoder.forward = types.MethodType(
+        single_batch_forward, middle_encoder)
+    return height, width, channels
+
+
 def install_export_symbolics(opset, tensorrt_85_compat=False):
     """Install compatibility symbolics missing from the PyTorch 2.0 exporter."""
     from torch.onnx import register_custom_op_symbolic
@@ -364,6 +399,10 @@ def main():
                 enable_standard_onnx_fallbacks(
                     runner.model, args.mixing_chunk_size, args.msmv_plugin,
                     args.single_camera_projection_plugin)
+            radar_scatter_shape = None
+            if args.tensorrt_85_compat:
+                radar_scatter_shape = enable_single_batch_radar_scatter(
+                    runner.model)
             fixed_geometry_error = None
             if args.fixed_view_geometry:
                 fixed_geometry_error = enable_fixed_view_geometry(
@@ -381,6 +420,12 @@ def main():
             'TensorRT LayerNorm input barriers: {}'.format(
                 layernorm_barrier_count),
         ])
+        if radar_scatter_shape is not None:
+            report.append(
+                'TensorRT 8.5 single-batch radar scatter: '
+                'channels={}, height={}, width={}'.format(
+                    radar_scatter_shape[2], radar_scatter_shape[0],
+                    radar_scatter_shape[1]))
         if fixed_geometry_error is not None:
             report.extend([
                 'fixed view geometry frame max error: {:.8f}'.format(
