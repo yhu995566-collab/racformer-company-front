@@ -212,6 +212,23 @@ def enable_fixed_view_geometry(model, img2lidar, atol=1e-6):
     return max_error
 
 
+def single_batch_radar_scatter(
+        voxel_features, coors, height, width, channels):
+    """Scatter one sample without exporting a dynamic batch mask."""
+    if voxel_features.dim() != 2:
+        raise RuntimeError(
+            'radar voxel features must have shape [voxels, channels]')
+    linear_indices = (
+        coors[:, -2] * int(width) + coors[:, -1]).to(torch.long)
+    scatter_indices = linear_indices.unsqueeze(0).expand(
+        int(channels), -1)
+    canvas = voxel_features.new_zeros(
+        (int(channels), int(height) * int(width)))
+    canvas = canvas.scatter(
+        1, scatter_indices, voxel_features.transpose(0, 1))
+    return canvas.reshape(1, int(channels), int(height), int(width))
+
+
 def enable_single_batch_radar_scatter(model):
     """Avoid the generic batch mask and its dynamic ONNX NonZero shape."""
     middle_encoder = model.radar_middle_encoder
@@ -227,19 +244,8 @@ def enable_single_batch_radar_scatter(model):
         if batch_size != 1:
             raise RuntimeError(
                 'TensorRT 8.5 radar scatter requires batch_size=1')
-        if voxel_features.dim() != 2:
-            raise RuntimeError(
-                'radar voxel features must have shape [voxels, channels]')
-        linear_indices = (
-            coors[:, -2] * int(width) + coors[:, -1]).to(torch.long)
-        scatter_indices = linear_indices.unsqueeze(0).expand(
-            int(channels), -1)
-        canvas = voxel_features.new_zeros(
-            (int(channels), int(height) * int(width)))
-        canvas = canvas.scatter(
-            1, scatter_indices, voxel_features.transpose(0, 1))
-        return canvas.reshape(
-            1, int(channels), int(height), int(width))
+        return single_batch_radar_scatter(
+            voxel_features, coors, height, width, channels)
 
     middle_encoder.forward = types.MethodType(
         single_batch_forward, middle_encoder)
