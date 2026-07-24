@@ -37,6 +37,9 @@ def parse_args():
     parser.add_argument(
         '--disable-cudnn-tactics', action='store_true',
         help='Exclude cuDNN tactics when the loaded cuDNN does not match TRT')
+    parser.add_argument(
+        '--faster-dynamic-shapes', action='store_true',
+        help='Enable TensorRT 8.5 FASTER_DYNAMIC_SHAPES_0805 preview feature')
     return parser.parse_args()
 
 
@@ -164,6 +167,19 @@ def main():
 
         config = builder.create_builder_config()
         config.clear_flag(trt.BuilderFlag.TF32)
+        if args.faster_dynamic_shapes:
+            feature_name = 'FASTER_DYNAMIC_SHAPES_0805'
+            if not hasattr(trt.PreviewFeature, feature_name):
+                raise RuntimeError(
+                    'TensorRT does not expose PreviewFeature.{}'.format(
+                        feature_name))
+            feature = getattr(trt.PreviewFeature, feature_name)
+            config.set_preview_feature(feature, True)
+            lines.append(
+                'faster dynamic shapes preview feature: enabled')
+        else:
+            lines.append(
+                'faster dynamic shapes preview feature: disabled')
         if args.fp16:
             if not builder.platform_has_fast_fp16:
                 raise RuntimeError('TensorRT reports no fast FP16 support')
