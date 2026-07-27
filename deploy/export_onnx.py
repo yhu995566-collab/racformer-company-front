@@ -455,7 +455,8 @@ def main():
         wrapper = RaCFormerONNXWrapper(
             runner.model, preprocessor.final_height,
             preprocessor.final_width).eval()
-        inputs = build_export_inputs(batch, runner.model)
+        unpadded_inputs = build_export_inputs(batch, runner.model)
+        inputs = unpadded_inputs
         if args.static_radar_voxels is not None:
             inputs = pad_radar_inputs(
                 inputs, args.static_radar_voxels,
@@ -482,12 +483,31 @@ def main():
                     runner.model)
             runner.model._deploy_trt_radar_frame_barriers = \
                 args.radar_frame_barriers
-            runner.model._deploy_trt_static_radar_padding = \
-                args.static_radar_voxels is not None
             fixed_geometry_error = None
             if args.fixed_view_geometry:
                 fixed_geometry_error = enable_fixed_view_geometry(
                     runner.model, inputs[4])
+            static_radar_comparisons = []
+            if args.static_radar_voxels is not None:
+                for frame_index in range(8):
+                    offset = 8 + frame_index * 3
+                    runner.model._deploy_trt_static_radar_padding = False
+                    unpadded_bev = runner.model.extract_pts_feat(
+                        unpadded_inputs[offset:offset + 3])
+                    runner.model._deploy_trt_static_radar_padding = True
+                    padded_bev = runner.model.extract_pts_feat(
+                        inputs[offset:offset + 3])
+                    difference = (unpadded_bev - padded_bev).abs()
+                    static_radar_comparisons.append((
+                        frame_index,
+                        torch.allclose(
+                            unpadded_bev, padded_bev, rtol=0.0,
+                            atol=args.boundary_atol),
+                        difference.max().item(),
+                        difference.mean().item(),
+                    ))
+            runner.model._deploy_trt_static_radar_padding = \
+                args.static_radar_voxels is not None
             outputs = wrapper(*inputs)
         torch.cuda.synchronize(runner.device)
         report.extend(['', '=== PyTorch raw outputs ==='])
@@ -507,6 +527,22 @@ def main():
                 'channels={}, height={}, width={}'.format(
                     radar_scatter_shape[2], radar_scatter_shape[0],
                     radar_scatter_shape[1]))
+        if static_radar_comparisons:
+            report.extend(['', '=== Static radar padding comparison ==='])
+            static_radar_passed = True
+            for frame_index, close, max_error, mean_error in \
+                    static_radar_comparisons:
+                static_radar_passed = static_radar_passed and close
+                report.append(
+                    'frame {}: close={}, max_abs_error={:.8f}, '
+                    'mean_abs_error={:.8f}'.format(
+                        frame_index, close, max_error, mean_error))
+            report.append(
+                'static radar padding comparison passed: {}'.format(
+                    static_radar_passed))
+            if not static_radar_passed:
+                raise RuntimeError(
+                    'static radar padding changes radar BEV features')
         if fixed_geometry_error is not None:
             report.extend([
                 'fixed view geometry frame max error: {:.8f}'.format(
