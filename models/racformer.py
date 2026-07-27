@@ -13,6 +13,7 @@ from torch.nn import functional as F
 from torch import nn as nn
 from mmcv.cnn import ConvModule
 from mmdet3d.ops import Voxelization
+from .csrc.tensorrt_barrier import tensorrt_fusion_barrier
 
 
 @DETECTORS.register_module()
@@ -157,7 +158,9 @@ class RaCFormer(MVXTwoStageDetector):
             radar_features = radar_features.squeeze(1)
         rad_bev_feas = self.radar_middle_encoder(radar_features, coors, batch_size)
 
-        rad_bev_feas = self.radar_bev_conv(rad_bev_feas)  
+        rad_bev_feas = self.radar_bev_conv(rad_bev_feas)
+        if getattr(self, '_deploy_trt_radar_frame_barriers', False):
+            rad_bev_feas = tensorrt_fusion_barrier(rad_bev_feas)
         return rad_bev_feas
 
 

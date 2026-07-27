@@ -63,6 +63,10 @@ def parse_args():
     parser.add_argument(
         '--tensorrt-85-compat', action='store_true',
         help='Decompose IsInf and LayerNormalization for TensorRT 8.5')
+    parser.add_argument(
+        '--radar-frame-barriers', action='store_true',
+        help='Keep the eight dynamic radar voxel branches in separate '
+             'TensorRT fusion regions')
     parser.add_argument('--out', required=True)
     parser.add_argument('--report', required=True)
     parser.add_argument(
@@ -355,6 +359,8 @@ def main():
             args.single_camera_projection_plugin),
         'fixed view geometry: {}'.format(args.fixed_view_geometry),
         'TensorRT 8.5 compatibility: {}'.format(args.tensorrt_85_compat),
+        'radar frame fusion barriers: {}'.format(
+            args.radar_frame_barriers),
         'output boundary: raw all_cls_scores + all_bbox_preds (decode excluded)',
     ]
     try:
@@ -363,6 +369,9 @@ def main():
         if args.single_camera_projection_plugin and not args.msmv_plugin:
             raise ValueError(
                 '--single-camera-projection-plugin requires --msmv-plugin')
+        if args.radar_frame_barriers and not args.tensorrt_85_compat:
+            raise ValueError(
+                '--radar-frame-barriers requires --tensorrt-85-compat')
         cfg = Config.fromfile(args.config)
         importlib.import_module('models')
         importlib.import_module('loaders')
@@ -409,6 +418,8 @@ def main():
             if args.tensorrt_85_compat:
                 radar_scatter_shape = enable_single_batch_radar_scatter(
                     runner.model)
+            runner.model._deploy_trt_radar_frame_barriers = \
+                args.radar_frame_barriers
             fixed_geometry_error = None
             if args.fixed_view_geometry:
                 fixed_geometry_error = enable_fixed_view_geometry(
