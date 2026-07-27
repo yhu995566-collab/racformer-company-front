@@ -214,7 +214,7 @@ def main():
         workspace_bytes = int(args.workspace_gb * (1024 ** 3))
         config.set_memory_pool_limit(
             trt.MemoryPoolType.WORKSPACE, workspace_bytes)
-        profile = builder.create_optimization_profile()
+        profile = None
         dynamic_inputs = 0
         lines.extend(['', '=== Optimization profile ==='])
         for index in range(network.num_inputs):
@@ -226,6 +226,8 @@ def main():
                 raise RuntimeError(
                     'unsupported dynamic input {}: {}'.format(
                         tensor.name, shape))
+            if profile is None:
+                profile = builder.create_optimization_profile()
             min_shape = (args.min_voxels,) + shape[1:]
             opt_shape = (args.opt_voxels,) + shape[1:]
             max_shape = (args.max_voxels,) + shape[1:]
@@ -234,13 +236,17 @@ def main():
             dynamic_inputs += 1
             lines.append('{}: {} / {} / {}'.format(
                 tensor.name, min_shape, opt_shape, max_shape))
-        if dynamic_inputs != 24:
+        if dynamic_inputs not in (0, 24):
             raise RuntimeError(
-                'expected 24 dynamic radar inputs, found {}'.format(
+                'expected zero or 24 dynamic radar inputs, found {}'.format(
                     dynamic_inputs))
-        if not profile:
-            raise RuntimeError('TensorRT rejected the optimization profile')
-        config.add_optimization_profile(profile)
+        if dynamic_inputs:
+            if not profile:
+                raise RuntimeError(
+                    'TensorRT rejected the optimization profile')
+            config.add_optimization_profile(profile)
+        else:
+            lines.append('all TensorRT inputs are static; no profile required')
 
         start = time.perf_counter()
         serialized = builder.build_serialized_network(network, config)

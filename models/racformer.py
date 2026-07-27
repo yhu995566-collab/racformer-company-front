@@ -138,7 +138,12 @@ class RaCFormer(MVXTwoStageDetector):
         if isinstance(radar_points, tuple):
             voxels, num_points, coors = radar_points
             batch_size = 1
+            valid_voxels = None
+            if getattr(self, '_deploy_trt_static_radar_padding', False):
+                valid_voxels = num_points > 0
+                num_points = num_points.clamp(min=1)
         else:
+            valid_voxels = None
             for i, radar_point in enumerate(radar_points):
                 radar_point[:, 2] = 0
                 radar_points[i] = radar_point
@@ -156,6 +161,9 @@ class RaCFormer(MVXTwoStageDetector):
 
         if radar_features.dim() == 3 and radar_features.shape[1] == 1:
             radar_features = radar_features.squeeze(1)
+        if valid_voxels is not None:
+            radar_features = radar_features * valid_voxels.to(
+                radar_features.dtype).unsqueeze(-1)
         rad_bev_feas = self.radar_middle_encoder(radar_features, coors, batch_size)
 
         rad_bev_feas = self.radar_bev_conv(rad_bev_feas)

@@ -67,6 +67,10 @@ def parse_args():
         '--radar-frame-barriers', action='store_true',
         help='Keep the eight dynamic radar voxel branches in separate '
              'TensorRT fusion regions')
+    parser.add_argument(
+        '--static-radar-voxels', type=int,
+        help='Pad every radar frame to this fixed voxel count and mask padded '
+             'features before scatter')
     parser.add_argument('--out', required=True)
     parser.add_argument('--report', required=True)
     parser.add_argument(
@@ -98,6 +102,53 @@ def save_fixture(path, inputs, outputs):
         arrays[name] = tensor.detach().cpu().numpy()
     np.savez_compressed(path, **arrays)
     return path
+
+
+def pad_radar_inputs(inputs, target_voxels, radar_output_shape):
+    """Pad the eight radar input triples to a fixed first dimension."""
+    height, width = (int(value) for value in radar_output_shape)
+    padded = list(inputs[:8])
+    for frame_index in range(8):
+        offset = 8 + frame_index * 3
+        voxels, num_points, coors = inputs[offset:offset + 3]
+        count = int(voxels.shape[0])
+        if count > target_voxels:
+            raise RuntimeError(
+                'radar frame {} has {} voxels, exceeding static capacity {}'
+                .format(frame_index, count, target_voxels))
+        padding = target_voxels - count
+        used_indices = set(
+            (coors[:, -2] * width + coors[:, -1])
+            .detach().cpu().tolist())
+        available_indices = [
+            index for index in range(height * width)
+            if index not in used_indices
+        ][:padding]
+        if len(available_indices) != padding:
+            raise RuntimeError(
+                'radar frame {} has insufficient unused BEV cells for {} '
+                'padding voxels'.format(frame_index, padding))
+        padding_coors = coors.new_zeros((padding, coors.shape[1]))
+        if padding:
+            padding_indices = coors.new_tensor(available_indices)
+            padding_coors[:, -2] = torch.div(
+                padding_indices, width, rounding_mode='trunc')
+            padding_coors[:, -1] = padding_indices % width
+        padded.extend((
+            torch.cat([
+                voxels,
+                voxels.new_zeros((padding,) + tuple(voxels.shape[1:])),
+            ], dim=0),
+            torch.cat([
+                num_points,
+                num_points.new_zeros((padding,)),
+            ], dim=0),
+            torch.cat([
+                coors,
+                padding_coors,
+            ], dim=0),
+        ))
+    return tuple(padded)
 
 
 def legacy_raw_outputs(model, batch):
@@ -361,6 +412,7 @@ def main():
         'TensorRT 8.5 compatibility: {}'.format(args.tensorrt_85_compat),
         'radar frame fusion barriers: {}'.format(
             args.radar_frame_barriers),
+        'static radar voxel slots: {}'.format(args.static_radar_voxels),
         'output boundary: raw all_cls_scores + all_bbox_preds (decode excluded)',
     ]
     try:
@@ -372,6 +424,12 @@ def main():
         if args.radar_frame_barriers and not args.tensorrt_85_compat:
             raise ValueError(
                 '--radar-frame-barriers requires --tensorrt-85-compat')
+        if args.static_radar_voxels is not None:
+            if args.static_radar_voxels <= 0:
+                raise ValueError('--static-radar-voxels must be positive')
+            if not args.tensorrt_85_compat:
+                raise ValueError(
+                    '--static-radar-voxels requires --tensorrt-85-compat')
         cfg = Config.fromfile(args.config)
         importlib.import_module('models')
         importlib.import_module('loaders')
@@ -398,6 +456,10 @@ def main():
             runner.model, preprocessor.final_height,
             preprocessor.final_width).eval()
         inputs = build_export_inputs(batch, runner.model)
+        if args.static_radar_voxels is not None:
+            inputs = pad_radar_inputs(
+                inputs, args.static_radar_voxels,
+                runner.model.radar_output_shape)
 
         report.extend(['', '=== Inputs ==='])
         report.extend(
@@ -420,6 +482,8 @@ def main():
                     runner.model)
             runner.model._deploy_trt_radar_frame_barriers = \
                 args.radar_frame_barriers
+            runner.model._deploy_trt_static_radar_padding = \
+                args.static_radar_voxels is not None
             fixed_geometry_error = None
             if args.fixed_view_geometry:
                 fixed_geometry_error = enable_fixed_view_geometry(
@@ -489,13 +553,14 @@ def main():
         operator_type = torch.onnx.OperatorExportTypes.ONNX_FALLTHROUGH \
             if args.fallthrough else torch.onnx.OperatorExportTypes.ONNX
         dynamic_axes = {}
-        for index in range(8):
-            voxel_count = 'radar_voxel_{}_count'.format(index)
-            dynamic_axes.update({
-                'radar_voxels_{}'.format(index): {0: voxel_count},
-                'radar_num_points_{}'.format(index): {0: voxel_count},
-                'radar_coors_{}'.format(index): {0: voxel_count},
-            })
+        if args.static_radar_voxels is None:
+            for index in range(8):
+                voxel_count = 'radar_voxel_{}_count'.format(index)
+                dynamic_axes.update({
+                    'radar_voxels_{}'.format(index): {0: voxel_count},
+                    'radar_num_points_{}'.format(index): {0: voxel_count},
+                    'radar_coors_{}'.format(index): {0: voxel_count},
+                })
         install_export_symbolics(args.opset, args.tensorrt_85_compat)
         torch.onnx.export(
             wrapper,
