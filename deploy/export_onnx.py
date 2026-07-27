@@ -166,6 +166,20 @@ def legacy_raw_outputs(model, batch):
     return outputs['all_cls_scores'], outputs['all_bbox_preds']
 
 
+def decode_raw_outputs(model, outputs):
+    predictions = model.pts_bbox_head.bbox_coder.decode({
+        'all_cls_scores': outputs[0],
+        'all_bbox_preds': outputs[1],
+    })[0]
+    boxes = predictions['bboxes'].detach().clone()
+    boxes[:, 2] -= boxes[:, 5] * 0.5
+    return (
+        boxes,
+        predictions['scores'].detach().clone(),
+        predictions['labels'].detach().clone(),
+    )
+
+
 def disable_gradient_checkpointing(model):
     """Disable training-only recomputation that the legacy exporter cannot trace."""
     disabled = []
@@ -568,6 +582,43 @@ def main():
         report.append('boundary atol: {}'.format(args.boundary_atol))
         report.append('boundary comparison passed: {}'.format(
             boundary_passed))
+        legacy_decoded = decode_raw_outputs(
+            runner.model, legacy_outputs)
+        current_decoded = decode_raw_outputs(
+            runner.model, outputs)
+        legacy_boxes, legacy_scores, legacy_labels = legacy_decoded
+        current_boxes, current_scores, current_labels = current_decoded
+        boxes_close = (
+            legacy_boxes.shape == current_boxes.shape and
+            torch.allclose(
+                legacy_boxes, current_boxes, rtol=0.0,
+                atol=args.boundary_atol))
+        scores_close = (
+            legacy_scores.shape == current_scores.shape and
+            torch.allclose(
+                legacy_scores, current_scores, rtol=0.0,
+                atol=args.boundary_atol))
+        labels_equal = torch.equal(legacy_labels, current_labels)
+        decoded_boundary_passed = (
+            boxes_close and scores_close and labels_equal)
+        report.extend([
+            '', '=== Decoded boundary comparison ===',
+            'legacy/current detection count: {}/{}'.format(
+                len(legacy_boxes), len(current_boxes)),
+            'boxes close: {}, max_abs_error={:.8f}'.format(
+                boxes_close,
+                (legacy_boxes - current_boxes).abs().max().item()
+                if legacy_boxes.shape == current_boxes.shape
+                else float('inf')),
+            'scores close: {}, max_abs_error={:.8f}'.format(
+                scores_close,
+                (legacy_scores - current_scores).abs().max().item()
+                if legacy_scores.shape == current_scores.shape
+                else float('inf')),
+            'labels equal: {}'.format(labels_equal),
+            'decoded boundary comparison passed: {}'.format(
+                decoded_boundary_passed),
+        ])
         if not boundary_passed and args.strict_boundary_check:
             raise RuntimeError(
                 'tensor metadata boundary does not match the legacy path')
