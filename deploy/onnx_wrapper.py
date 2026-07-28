@@ -34,10 +34,28 @@ class RaCFormerONNXWrapper(nn.Module):
                 ('position_encoder', decoder_layer.position_encoder),
                 ('self_attn', decoder_layer.self_attn),
                 ('norm1', decoder_layer.norm1),
+                ('radar_sampling_offset',
+                 decoder_layer.sampling_radar_bev.sampling_offset),
+                ('radar_ray_points_offset',
+                 decoder_layer.sampling_radar_bev.ray_points_offset),
+                ('radar_scale_weights',
+                 decoder_layer.sampling_radar_bev.scale_weights),
                 ('sampling_radar_bev', decoder_layer.sampling_radar_bev),
                 ('norm_radar_bev', decoder_layer.norm_radar_bev),
+                ('lss_sampling_offset',
+                 decoder_layer.sampling_lss_bev.sampling_offset),
+                ('lss_ray_points_offset',
+                 decoder_layer.sampling_lss_bev.ray_points_offset),
+                ('lss_scale_weights',
+                 decoder_layer.sampling_lss_bev.scale_weights),
                 ('sampling_lss_bev', decoder_layer.sampling_lss_bev),
                 ('norm_lss_bev', decoder_layer.norm_lss_bev),
+                ('image_sampling_offset',
+                 decoder_layer.sampling.sampling_offset),
+                ('image_ray_points_offset',
+                 decoder_layer.sampling.ray_points_offset),
+                ('image_scale_weights',
+                 decoder_layer.sampling.scale_weights),
                 ('sampling_image', decoder_layer.sampling),
                 ('mixing', decoder_layer.mixing),
                 ('norm2', decoder_layer.norm2),
@@ -51,6 +69,12 @@ class RaCFormerONNXWrapper(nn.Module):
             for name, module in self._decoder_internal_modules:
                 module.register_forward_hook(
                     self._make_decoder_internal_hook(name))
+            decoder_layer.sampling_radar_bev.attention \
+                .register_forward_pre_hook(
+                    self._make_attention_input_hook('radar_attention'))
+            decoder_layer.sampling_lss_bev.attention \
+                .register_forward_pre_hook(
+                    self._make_attention_input_hook('lss_attention'))
 
     @staticmethod
     def _sample_tensor(tensor, sample_count=4096):
@@ -81,6 +105,18 @@ class RaCFormerONNXWrapper(nn.Module):
             tensor = output[0] if isinstance(output, (tuple, list)) else output
             self._decoder_internal_debug_samples[name] = \
                 self._sample_tensor(tensor)
+        return capture
+
+    def _make_attention_input_hook(self, prefix):
+        def capture(module, inputs):
+            del module
+            input_names = ('query', 'value', 'sampling_points', 'weights')
+            for name, tensor in zip(input_names, inputs[:4]):
+                key = '{}_{}'.format(prefix, name)
+                if tensor is not None and \
+                        key not in self._decoder_internal_debug_samples:
+                    self._decoder_internal_debug_samples[key] = \
+                        self._sample_tensor(tensor)
         return capture
 
     def forward(self, image, radar_depth, radar_rcs, lidar2img, img2lidar,
@@ -122,10 +158,7 @@ class RaCFormerONNXWrapper(nn.Module):
         outputs = self.model.pts_bbox_head(
             img_feats, bev_feats, radar_bev_feats, [img_meta])
         if self.debug_intermediates:
-            internal_names = [
-                name for name, _ in self._decoder_internal_modules
-                if name in self._decoder_internal_debug_samples
-            ]
+            internal_names = list(self._decoder_internal_debug_samples)
             internal_outputs = [
                 self._decoder_internal_debug_samples[name]
                 for name in internal_names
