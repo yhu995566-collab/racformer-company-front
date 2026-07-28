@@ -32,8 +32,18 @@ class RaCFormerONNXWrapper(nn.Module):
     @staticmethod
     def _sample_tensor(tensor, sample_count=4096):
         flat = tensor.reshape(-1)
-        stride = max(1, flat.numel() // int(sample_count))
-        return flat[::stride][:sample_count]
+        count = min(flat.numel(), int(sample_count))
+        if count == flat.numel():
+            return flat
+        # Fixed Gather indices avoid exporter-dependent strided Slice nodes.
+        indices = torch.tensor(
+            [
+                index * flat.numel() // count
+                for index in range(count)
+            ],
+            dtype=torch.long,
+            device=flat.device)
+        return torch.index_select(flat, 0, indices)
 
     def _capture_decoder_query(self, module, inputs, outputs):
         del module, inputs
