@@ -13,11 +13,32 @@ class RaCFormerONNXWrapper(nn.Module):
     outside the graph because it produces variable-length framework objects.
     """
 
-    def __init__(self, model, image_height, image_width):
+    def __init__(
+            self, model, image_height, image_width,
+            debug_intermediates=False):
         super().__init__()
         self.model = model
         self.image_height = int(image_height)
         self.image_width = int(image_width)
+        self.debug_intermediates = bool(debug_intermediates)
+        self.debug_output_names = []
+        self._decoder_debug_samples = []
+        if self.debug_intermediates:
+            decoder_layer = self.model.pts_bbox_head.transformer.decoder \
+                .decoder_layer
+            decoder_layer.register_forward_hook(
+                self._capture_decoder_query)
+
+    @staticmethod
+    def _sample_tensor(tensor, sample_count=4096):
+        flat = tensor.reshape(-1)
+        stride = max(1, flat.numel() // int(sample_count))
+        return flat[::stride][:sample_count]
+
+    def _capture_decoder_query(self, module, inputs, outputs):
+        del module, inputs
+        self._decoder_debug_samples.append(
+            self._sample_tensor(outputs[0]))
 
     def forward(self, image, radar_depth, radar_rcs, lidar2img, img2lidar,
                 mlp_input, time_diff, velocity_time_diff,
@@ -45,8 +66,32 @@ class RaCFormerONNXWrapper(nn.Module):
             radar_depth=radar_depth,
             radar_rcs=radar_rcs,
             img_metas=[img_meta])
+        debug_outputs = []
+        self._decoder_debug_samples = []
+        if self.debug_intermediates:
+            debug_outputs.extend(
+                self._sample_tensor(feature) for feature in img_feats)
+            debug_outputs.extend([
+                self._sample_tensor(bev_feats),
+                self._sample_tensor(radar_bev_feats),
+            ])
         outputs = self.model.pts_bbox_head(
             img_feats, bev_feats, radar_bev_feats, [img_meta])
+        if self.debug_intermediates:
+            self.debug_output_names = [
+                'debug_img_feat_{}'.format(index)
+                for index in range(len(img_feats))
+            ] + [
+                'debug_lss_bev',
+                'debug_radar_bev',
+            ] + [
+                'debug_decoder_query_{}'.format(index)
+                for index in range(len(self._decoder_debug_samples))
+            ]
+            return tuple(debug_outputs + self._decoder_debug_samples + [
+                outputs['all_cls_scores'],
+                outputs['all_bbox_preds'],
+            ])
         return outputs['all_cls_scores'], outputs['all_bbox_preds']
 
 

@@ -71,6 +71,10 @@ def parse_args():
         '--static-radar-voxels', type=int,
         help='Pad every radar frame to this fixed voxel count and mask padded '
              'features before scatter')
+    parser.add_argument(
+        '--debug-intermediate-outputs', action='store_true',
+        help='Export sampled image/BEV/decoder tensors for TensorRT '
+             'localization')
     parser.add_argument('--out', required=True)
     parser.add_argument('--report', required=True)
     parser.add_argument(
@@ -92,13 +96,13 @@ def write_report(path, lines):
     print('Export report: {}'.format(path))
 
 
-def save_fixture(path, inputs, outputs):
+def save_fixture(path, inputs, outputs, output_names):
     path = os.path.abspath(path)
     mmcv.mkdir_or_exist(os.path.dirname(path))
     arrays = {}
     for name, tensor in zip(INPUT_NAMES, inputs):
         arrays[name] = tensor.detach().cpu().numpy()
-    for name, tensor in zip(OUTPUT_NAMES, outputs):
+    for name, tensor in zip(output_names, outputs):
         arrays[name] = tensor.detach().cpu().numpy()
     np.savez_compressed(path, **arrays)
     return path
@@ -427,6 +431,8 @@ def main():
         'radar frame fusion barriers: {}'.format(
             args.radar_frame_barriers),
         'static radar voxel slots: {}'.format(args.static_radar_voxels),
+        'debug intermediate outputs: {}'.format(
+            args.debug_intermediate_outputs),
         'output boundary: raw all_cls_scores + all_bbox_preds (decode excluded)',
     ]
     try:
@@ -468,7 +474,8 @@ def main():
         batch = runner.prepare(cpu_batch)
         wrapper = RaCFormerONNXWrapper(
             runner.model, preprocessor.final_height,
-            preprocessor.final_width).eval()
+            preprocessor.final_width,
+            debug_intermediates=args.debug_intermediate_outputs).eval()
         unpadded_inputs = build_export_inputs(batch, runner.model)
         inputs = unpadded_inputs
         if args.static_radar_voxels is not None:
@@ -523,11 +530,15 @@ def main():
             runner.model._deploy_trt_static_radar_padding = \
                 args.static_radar_voxels is not None
             outputs = wrapper(*inputs)
+            output_names = (
+                wrapper.debug_output_names + OUTPUT_NAMES
+                if args.debug_intermediate_outputs else OUTPUT_NAMES)
+            raw_outputs = outputs[-2:]
         torch.cuda.synchronize(runner.device)
-        report.extend(['', '=== PyTorch raw outputs ==='])
+        report.extend(['', '=== PyTorch outputs ==='])
         report.extend(
             describe_tensor(name, tensor)
-            for name, tensor in zip(OUTPUT_NAMES, outputs))
+            for name, tensor in zip(output_names, outputs))
         report.extend([
             'cached BEV positional maps: {}'.format(cache_count),
             'cached BEV positional map size: {:.2f} MB'.format(
@@ -569,7 +580,7 @@ def main():
         report.extend(['', '=== Tensor metadata boundary check ==='])
         boundary_passed = True
         for name, legacy, current in zip(
-                OUTPUT_NAMES, legacy_outputs, outputs):
+                OUTPUT_NAMES, legacy_outputs, raw_outputs):
             difference = (legacy - current).abs()
             close = torch.allclose(
                 legacy, current, rtol=0.0, atol=args.boundary_atol)
@@ -585,7 +596,7 @@ def main():
         legacy_decoded = decode_raw_outputs(
             runner.model, legacy_outputs)
         current_decoded = decode_raw_outputs(
-            runner.model, outputs)
+            runner.model, raw_outputs)
         legacy_boxes, legacy_scores, legacy_labels = legacy_decoded
         current_boxes, current_scores, current_labels = current_decoded
         boxes_close = (
@@ -628,11 +639,12 @@ def main():
                 'CUDA kernels can vary across independent full forwards')
 
         if args.fixture:
-            fixture_path = save_fixture(args.fixture, inputs, outputs)
+            fixture_path = save_fixture(
+                args.fixture, inputs, outputs, output_names)
             report.extend([
                 '', '=== TensorRT fixture ===',
                 'fixture: {}'.format(fixture_path),
-                'arrays: {}'.format(len(INPUT_NAMES) + len(OUTPUT_NAMES)),
+                'arrays: {}'.format(len(INPUT_NAMES) + len(output_names)),
             ])
 
         output_path = os.path.abspath(args.out)
@@ -657,7 +669,7 @@ def main():
             opset_version=args.opset,
             do_constant_folding=args.constant_folding,
             input_names=INPUT_NAMES,
-            output_names=OUTPUT_NAMES,
+            output_names=output_names,
             dynamic_axes=dynamic_axes,
             operator_export_type=operator_type,
             verbose=False)
