@@ -23,11 +23,34 @@ class RaCFormerONNXWrapper(nn.Module):
         self.debug_intermediates = bool(debug_intermediates)
         self.debug_output_names = []
         self._decoder_debug_samples = []
+        self._decoder_internal_debug_samples = {}
+        self._decoder_internal_modules = []
         if self.debug_intermediates:
             decoder_layer = self.model.pts_bbox_head.transformer.decoder \
                 .decoder_layer
             decoder_layer.register_forward_hook(
                 self._capture_decoder_query)
+            self._decoder_internal_modules = [
+                ('position_encoder', decoder_layer.position_encoder),
+                ('self_attn', decoder_layer.self_attn),
+                ('norm1', decoder_layer.norm1),
+                ('sampling_radar_bev', decoder_layer.sampling_radar_bev),
+                ('norm_radar_bev', decoder_layer.norm_radar_bev),
+                ('sampling_lss_bev', decoder_layer.sampling_lss_bev),
+                ('norm_lss_bev', decoder_layer.norm_lss_bev),
+                ('sampling_image', decoder_layer.sampling),
+                ('mixing', decoder_layer.mixing),
+                ('norm2', decoder_layer.norm2),
+                ('fusion', decoder_layer.fusion),
+                ('norm_fusion', decoder_layer.norm_fusion),
+                ('ffn', decoder_layer.ffn),
+                ('norm3', decoder_layer.norm3),
+                ('cls_branch', decoder_layer.cls_branch),
+                ('reg_branch', decoder_layer.reg_branch),
+            ]
+            for name, module in self._decoder_internal_modules:
+                module.register_forward_hook(
+                    self._make_decoder_internal_hook(name))
 
     @staticmethod
     def _sample_tensor(tensor, sample_count=4096):
@@ -49,6 +72,16 @@ class RaCFormerONNXWrapper(nn.Module):
         del module, inputs
         self._decoder_debug_samples.append(
             self._sample_tensor(outputs[0]))
+
+    def _make_decoder_internal_hook(self, name):
+        def capture(module, inputs, output):
+            del module, inputs
+            if name in self._decoder_internal_debug_samples:
+                return
+            tensor = output[0] if isinstance(output, (tuple, list)) else output
+            self._decoder_internal_debug_samples[name] = \
+                self._sample_tensor(tensor)
+        return capture
 
     def forward(self, image, radar_depth, radar_rcs, lidar2img, img2lidar,
                 mlp_input, time_diff, velocity_time_diff,
@@ -78,6 +111,7 @@ class RaCFormerONNXWrapper(nn.Module):
             img_metas=[img_meta])
         debug_outputs = []
         self._decoder_debug_samples = []
+        self._decoder_internal_debug_samples = {}
         if self.debug_intermediates:
             debug_outputs.extend(
                 self._sample_tensor(feature) for feature in img_feats)
@@ -88,6 +122,14 @@ class RaCFormerONNXWrapper(nn.Module):
         outputs = self.model.pts_bbox_head(
             img_feats, bev_feats, radar_bev_feats, [img_meta])
         if self.debug_intermediates:
+            internal_names = [
+                name for name, _ in self._decoder_internal_modules
+                if name in self._decoder_internal_debug_samples
+            ]
+            internal_outputs = [
+                self._decoder_internal_debug_samples[name]
+                for name in internal_names
+            ]
             self.debug_output_names = [
                 'debug_img_feat_{}'.format(index)
                 for index in range(len(img_feats))
@@ -95,10 +137,14 @@ class RaCFormerONNXWrapper(nn.Module):
                 'debug_lss_bev',
                 'debug_radar_bev',
             ] + [
+                'debug_decoder0_{}'.format(name)
+                for name in internal_names
+            ] + [
                 'debug_decoder_query_{}'.format(index)
                 for index in range(len(self._decoder_debug_samples))
             ]
-            return tuple(debug_outputs + self._decoder_debug_samples + [
+            return tuple(debug_outputs + internal_outputs
+                         + self._decoder_debug_samples + [
                 outputs['all_cls_scores'],
                 outputs['all_bbox_preds'],
             ])
