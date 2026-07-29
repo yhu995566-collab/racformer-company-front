@@ -37,6 +37,9 @@ def parse_args():
     parser.add_argument('--model-fixture', required=True)
     parser.add_argument('--device', default='cuda:0')
     parser.add_argument('--opset', type=int, default=17)
+    parser.add_argument(
+        '--include-scale-projection', action='store_true',
+        help='Generate attention weights from the real LSS projection')
     parser.add_argument('--out', required=True)
     parser.add_argument('--fixture', required=True)
     parser.add_argument('--report', required=True)
@@ -52,6 +55,39 @@ class LSSAttentionProbe(nn.Module):
         self.spatial_shape = tuple(int(value) for value in spatial_shape)
 
     def forward(self, query, value, sampling_points, attention_weights):
+        return self.attention(
+            query,
+            value,
+            sampling_points,
+            attention_weights,
+            spatial_shapes=self.spatial_shape)
+
+
+class LSSProjectedAttentionProbe(nn.Module):
+
+    def __init__(self, sampling, spatial_shape):
+        super().__init__()
+        self.scale_weights = copy.deepcopy(sampling.scale_weights)
+        self.attention = copy.deepcopy(sampling.attention)
+        self.attention._deploy_onnx_fallback = True
+        self.spatial_shape = tuple(int(value) for value in spatial_shape)
+        self.num_heads = int(sampling.num_heads)
+        self.num_frames = int(sampling.num_frames)
+        self.num_levels = int(sampling.num_levels)
+        self.depth_points = int(sampling.depth_num * sampling.num_points)
+
+    def project_weights(self, query):
+        batch, queries, _ = query.shape
+        weights = self.scale_weights(query).view(
+            batch, queries, self.num_heads, 1,
+            self.num_levels, self.depth_points)
+        weights = torch.softmax(weights, dim=-1)
+        return weights.expand(
+            batch, queries, self.num_heads, self.num_frames,
+            self.num_levels, self.depth_points).contiguous()
+
+    def forward(self, query, value, sampling_points):
+        attention_weights = self.project_weights(query)
         return self.attention(
             query,
             value,
@@ -83,6 +119,8 @@ def main():
         'model fixture: {}'.format(os.path.abspath(args.model_fixture)),
         'device: {}'.format(args.device),
         'opset: {}'.format(args.opset),
+        'include scale projection: {}'.format(
+            args.include_scale_projection),
     ]
     fixture_data = None
     try:
@@ -113,7 +151,8 @@ def main():
             image_width=int(model_inputs[0].shape[-1])).eval()
         decoder_layer = runner.model.pts_bbox_head.transformer.decoder \
             .decoder_layer
-        attention = decoder_layer.sampling_lss_bev.attention
+        sampling = decoder_layer.sampling_lss_bev
+        attention = sampling.attention
         captured = {}
 
         def capture_first(module, inputs):
@@ -140,9 +179,29 @@ def main():
 
         value = captured['value']
         spatial_shape = value.shape[-2:]
-        probe = LSSAttentionProbe(
-            attention, spatial_shape).to(runner.device).eval()
-        probe_inputs = tuple(captured[name] for name in PROBE_INPUT_NAMES)
+        if args.include_scale_projection:
+            probe = LSSProjectedAttentionProbe(
+                sampling, spatial_shape).to(runner.device).eval()
+            probe_input_names = PROBE_INPUT_NAMES[:3]
+            probe_inputs = tuple(
+                captured[name] for name in probe_input_names)
+            with torch.no_grad():
+                projected_weights = probe.project_weights(
+                    captured['query'])
+            weight_difference = (
+                projected_weights - captured['attention_weights']).abs()
+            lines.extend([
+                'projected weights max abs error: {:.8f}'.format(
+                    weight_difference.max().item()),
+                'projected weights mean abs error: {:.8f}'.format(
+                    weight_difference.mean().item()),
+            ])
+        else:
+            probe = LSSAttentionProbe(
+                attention, spatial_shape).to(runner.device).eval()
+            probe_input_names = PROBE_INPUT_NAMES
+            probe_inputs = tuple(
+                captured[name] for name in probe_input_names)
         with torch.no_grad():
             probe_output = probe(*probe_inputs)
         torch.cuda.synchronize(runner.device)
@@ -150,7 +209,7 @@ def main():
         lines.extend(['', '=== Probe tensors ==='])
         lines.extend(
             describe(name, tensor)
-            for name, tensor in zip(PROBE_INPUT_NAMES, probe_inputs))
+            for name, tensor in zip(probe_input_names, probe_inputs))
         lines.append(describe(PROBE_OUTPUT_NAMES[0], probe_output))
         lines.append(
             'spatial shape: {}'.format(tuple(int(v) for v in spatial_shape)))
@@ -159,7 +218,7 @@ def main():
         os.makedirs(os.path.dirname(fixture_path) or '.', exist_ok=True)
         arrays = {
             name: tensor.detach().cpu().numpy()
-            for name, tensor in zip(PROBE_INPUT_NAMES, probe_inputs)
+            for name, tensor in zip(probe_input_names, probe_inputs)
         }
         arrays[PROBE_OUTPUT_NAMES[0]] = \
             probe_output.detach().cpu().numpy()
@@ -174,7 +233,7 @@ def main():
             export_params=True,
             opset_version=args.opset,
             do_constant_folding=False,
-            input_names=PROBE_INPUT_NAMES,
+            input_names=probe_input_names,
             output_names=PROBE_OUTPUT_NAMES,
             verbose=False)
         onnx.checker.check_model(onnx.load(output_path))
