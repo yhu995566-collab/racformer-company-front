@@ -75,6 +75,11 @@ def parse_args():
         '--debug-intermediate-outputs', action='store_true',
         help='Export sampled image/BEV/decoder tensors for TensorRT '
              'localization')
+    parser.add_argument(
+        '--debug-output-group',
+        choices=('all', 'core', 'radar', 'lss', 'image', 'post'),
+        default='all',
+        help='Limit intermediate outputs to one decoder region')
     parser.add_argument('--out', required=True)
     parser.add_argument('--report', required=True)
     parser.add_argument(
@@ -433,6 +438,7 @@ def main():
         'static radar voxel slots: {}'.format(args.static_radar_voxels),
         'debug intermediate outputs: {}'.format(
             args.debug_intermediate_outputs),
+        'debug output group: {}'.format(args.debug_output_group),
         'output boundary: raw all_cls_scores + all_bbox_preds (decode excluded)',
     ]
     try:
@@ -475,7 +481,8 @@ def main():
         wrapper = RaCFormerONNXWrapper(
             runner.model, preprocessor.final_height,
             preprocessor.final_width,
-            debug_intermediates=args.debug_intermediate_outputs).eval()
+            debug_intermediates=args.debug_intermediate_outputs,
+            debug_output_group=args.debug_output_group).eval()
         unpadded_inputs = build_export_inputs(batch, runner.model)
         inputs = unpadded_inputs
         if args.static_radar_voxels is not None:

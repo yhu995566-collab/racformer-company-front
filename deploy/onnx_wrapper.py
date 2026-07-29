@@ -15,12 +15,13 @@ class RaCFormerONNXWrapper(nn.Module):
 
     def __init__(
             self, model, image_height, image_width,
-            debug_intermediates=False):
+            debug_intermediates=False, debug_output_group='all'):
         super().__init__()
         self.model = model
         self.image_height = int(image_height)
         self.image_width = int(image_width)
         self.debug_intermediates = bool(debug_intermediates)
+        self.debug_output_group = debug_output_group
         self.debug_output_names = []
         self._decoder_debug_samples = []
         self._decoder_internal_debug_samples = {}
@@ -28,53 +29,78 @@ class RaCFormerONNXWrapper(nn.Module):
         if self.debug_intermediates:
             decoder_layer = self.model.pts_bbox_head.transformer.decoder \
                 .decoder_layer
-            decoder_layer.register_forward_hook(
-                self._capture_decoder_query)
-            self._decoder_internal_modules = [
+            if self.debug_output_group in ('all', 'core', 'post'):
+                decoder_layer.register_forward_hook(
+                    self._capture_decoder_query)
+            common_modules = [
                 ('position_encoder', decoder_layer.position_encoder),
                 ('self_attn', decoder_layer.self_attn),
                 ('norm1', decoder_layer.norm1),
-                ('radar_sampling_offset',
-                 decoder_layer.sampling_radar_bev.sampling_offset),
-                ('radar_ray_points_offset',
-                 decoder_layer.sampling_radar_bev.ray_points_offset),
-                ('radar_scale_weights',
-                 decoder_layer.sampling_radar_bev.scale_weights),
-                ('sampling_radar_bev', decoder_layer.sampling_radar_bev),
-                ('norm_radar_bev', decoder_layer.norm_radar_bev),
-                ('lss_sampling_offset',
-                 decoder_layer.sampling_lss_bev.sampling_offset),
-                ('lss_ray_points_offset',
-                 decoder_layer.sampling_lss_bev.ray_points_offset),
-                ('lss_scale_weights',
-                 decoder_layer.sampling_lss_bev.scale_weights),
-                ('sampling_lss_bev', decoder_layer.sampling_lss_bev),
-                ('norm_lss_bev', decoder_layer.norm_lss_bev),
-                ('image_sampling_offset',
-                 decoder_layer.sampling.sampling_offset),
-                ('image_ray_points_offset',
-                 decoder_layer.sampling.ray_points_offset),
-                ('image_scale_weights',
-                 decoder_layer.sampling.scale_weights),
-                ('sampling_image', decoder_layer.sampling),
-                ('mixing', decoder_layer.mixing),
-                ('norm2', decoder_layer.norm2),
-                ('fusion', decoder_layer.fusion),
-                ('norm_fusion', decoder_layer.norm_fusion),
-                ('ffn', decoder_layer.ffn),
-                ('norm3', decoder_layer.norm3),
-                ('cls_branch', decoder_layer.cls_branch),
-                ('reg_branch', decoder_layer.reg_branch),
             ]
+            grouped_modules = {
+                'radar': [
+                    ('radar_sampling_offset',
+                     decoder_layer.sampling_radar_bev.sampling_offset),
+                    ('radar_ray_points_offset',
+                     decoder_layer.sampling_radar_bev.ray_points_offset),
+                    ('radar_scale_weights',
+                     decoder_layer.sampling_radar_bev.scale_weights),
+                    ('sampling_radar_bev',
+                     decoder_layer.sampling_radar_bev),
+                    ('norm_radar_bev', decoder_layer.norm_radar_bev),
+                ],
+                'lss': [
+                    ('lss_sampling_offset',
+                     decoder_layer.sampling_lss_bev.sampling_offset),
+                    ('lss_ray_points_offset',
+                     decoder_layer.sampling_lss_bev.ray_points_offset),
+                    ('lss_scale_weights',
+                     decoder_layer.sampling_lss_bev.scale_weights),
+                    ('sampling_lss_bev',
+                     decoder_layer.sampling_lss_bev),
+                    ('norm_lss_bev', decoder_layer.norm_lss_bev),
+                ],
+                'image': [
+                    ('image_sampling_offset',
+                     decoder_layer.sampling.sampling_offset),
+                    ('image_ray_points_offset',
+                     decoder_layer.sampling.ray_points_offset),
+                    ('image_scale_weights',
+                     decoder_layer.sampling.scale_weights),
+                    ('sampling_image', decoder_layer.sampling),
+                ],
+                'post': [
+                    ('mixing', decoder_layer.mixing),
+                    ('norm2', decoder_layer.norm2),
+                    ('fusion', decoder_layer.fusion),
+                    ('norm_fusion', decoder_layer.norm_fusion),
+                    ('ffn', decoder_layer.ffn),
+                    ('norm3', decoder_layer.norm3),
+                    ('cls_branch', decoder_layer.cls_branch),
+                    ('reg_branch', decoder_layer.reg_branch),
+                ],
+            }
+            if self.debug_output_group == 'all':
+                selected_groups = ('radar', 'lss', 'image', 'post')
+            elif self.debug_output_group == 'core':
+                selected_groups = ()
+            else:
+                selected_groups = (self.debug_output_group,)
+            self._decoder_internal_modules = list(common_modules)
+            for group in selected_groups:
+                self._decoder_internal_modules.extend(
+                    grouped_modules[group])
             for name, module in self._decoder_internal_modules:
                 module.register_forward_hook(
                     self._make_decoder_internal_hook(name))
-            decoder_layer.sampling_radar_bev.attention \
-                .register_forward_pre_hook(
-                    self._make_attention_input_hook('radar_attention'))
-            decoder_layer.sampling_lss_bev.attention \
-                .register_forward_pre_hook(
-                    self._make_attention_input_hook('lss_attention'))
+            if self.debug_output_group in ('all', 'radar'):
+                decoder_layer.sampling_radar_bev.attention \
+                    .register_forward_pre_hook(
+                        self._make_attention_input_hook('radar_attention'))
+            if self.debug_output_group in ('all', 'lss'):
+                decoder_layer.sampling_lss_bev.attention \
+                    .register_forward_pre_hook(
+                        self._make_attention_input_hook('lss_attention'))
 
     @staticmethod
     def _sample_tensor(tensor, sample_count=4096):
@@ -143,7 +169,8 @@ class RaCFormerONNXWrapper(nn.Module):
         debug_outputs = []
         self._decoder_debug_samples = []
         self._decoder_internal_debug_samples = {}
-        if self.debug_intermediates:
+        if self.debug_intermediates and \
+                self.debug_output_group in ('all', 'core'):
             debug_outputs.extend(
                 self._sample_tensor(feature) for feature in img_feats)
             debug_outputs.extend([
@@ -158,13 +185,16 @@ class RaCFormerONNXWrapper(nn.Module):
                 self._decoder_internal_debug_samples[name]
                 for name in internal_names
             ]
-            self.debug_output_names = [
-                'debug_img_feat_{}'.format(index)
-                for index in range(len(img_feats))
-            ] + [
-                'debug_lss_bev',
-                'debug_radar_bev',
-            ] + [
+            base_names = []
+            if self.debug_output_group in ('all', 'core'):
+                base_names = [
+                    'debug_img_feat_{}'.format(index)
+                    for index in range(len(img_feats))
+                ] + [
+                    'debug_lss_bev',
+                    'debug_radar_bev',
+                ]
+            self.debug_output_names = base_names + [
                 'debug_decoder0_{}'.format(name)
                 for name in internal_names
             ] + [
