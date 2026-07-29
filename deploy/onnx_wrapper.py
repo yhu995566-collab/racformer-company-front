@@ -82,15 +82,10 @@ class RaCFormerONNXWrapper(nn.Module):
         count = min(flat.numel(), int(sample_count))
         if count == flat.numel():
             return flat
-        # Fixed Gather indices avoid exporter-dependent strided Slice nodes.
-        indices = torch.tensor(
-            [
-                index * flat.numel() // count
-                for index in range(count)
-            ],
-            dtype=torch.long,
-            device=flat.device)
-        return torch.index_select(flat, 0, indices)
+        # Keep diagnostics on a contiguous prefix. Constant Gather outputs can
+        # become part of large Myelin fusion regions in TensorRT 8.x and alter
+        # both tactic selection and the values being inspected.
+        return flat[:count]
 
     def _capture_decoder_query(self, module, inputs, outputs):
         del module, inputs
