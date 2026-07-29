@@ -466,13 +466,7 @@ class RaCFormerSampling(BaseModule):
             sampling_points = tensorrt_fusion_barrier(sampling_points)
 
         # scale weights
-        scale_weight_logits = self.scale_weights(query_feat)
-        if getattr(self, '_deploy_trt_sampling_barriers', False):
-            scale_weight_logits = tensorrt_fusion_barrier(
-                scale_weight_logits)
-        scale_weights = scale_weight_logits.view(
-            B, Q, self.num_groups, self.num_frames,
-            self.depth_num*self.num_points, self.num_levels).contiguous()
+        scale_weights = self.scale_weights(query_feat).view(B, Q, self.num_groups, self.num_frames, self.depth_num*self.num_points, self.num_levels).contiguous()
         scale_weights = torch.softmax(scale_weights, dim=-1)
         if getattr(self, '_deploy_trt_sampling_barriers', False):
             scale_weights = tensorrt_fusion_barrier(scale_weights)
@@ -614,13 +608,7 @@ class BEVSampling(BaseModule):
                 
         # scale weights
         sampling_points = sampling_points.permute(0,1,3,2,4,5).contiguous()
-        scale_weight_logits = self.scale_weights(query_feat)
-        if getattr(self, '_deploy_trt_sampling_barriers', False):
-            scale_weight_logits = tensorrt_fusion_barrier(
-                scale_weight_logits)
-        scale_weights = scale_weight_logits.view(
-            B, Q, self.num_heads, 1, self.num_levels,
-            self.depth_num*self.num_points).contiguous()
+        scale_weights = self.scale_weights(query_feat).view(B, Q, self.num_heads, 1, self.num_levels, self.depth_num*self.num_points).contiguous()
         scale_weights = torch.softmax(scale_weights, dim=-1)
         
         scale_weights = scale_weights.expand(B, Q, self.num_heads, self.num_frames, self.num_levels, self.depth_num*self.num_points).contiguous()
