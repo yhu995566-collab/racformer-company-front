@@ -28,6 +28,12 @@ PROBE_INPUT_NAMES = [
     'attention_weights',
 ]
 PROBE_OUTPUT_NAMES = ['attention_output']
+SAMPLING_INPUT_NAMES = [
+    'query_ray',
+    'query_feat',
+    'bev_feats',
+    'time_diff',
+]
 
 
 def parse_args():
@@ -40,6 +46,9 @@ def parse_args():
     parser.add_argument(
         '--include-scale-projection', action='store_true',
         help='Generate attention weights from the real LSS projection')
+    parser.add_argument(
+        '--include-coordinate-generation', action='store_true',
+        help='Export the complete LSS sampling branch')
     parser.add_argument('--out', required=True)
     parser.add_argument('--fixture', required=True)
     parser.add_argument('--report', required=True)
@@ -96,6 +105,23 @@ class LSSProjectedAttentionProbe(nn.Module):
             spatial_shapes=self.spatial_shape)
 
 
+class LSSSamplingProbe(nn.Module):
+
+    def __init__(self, sampling, d_region):
+        super().__init__()
+        self.sampling = copy.deepcopy(sampling)
+        self.d_region = float(d_region)
+
+    def forward(self, query_ray, query_feat, bev_feats, time_diff):
+        img_metas = [dict(time_diff=time_diff)]
+        return self.sampling(
+            query_ray,
+            query_feat,
+            bev_feats,
+            img_metas,
+            d_region=self.d_region)
+
+
 def write_report(path, lines):
     path = os.path.abspath(path)
     os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
@@ -121,6 +147,8 @@ def main():
         'opset: {}'.format(args.opset),
         'include scale projection: {}'.format(
             args.include_scale_projection),
+        'include coordinate generation: {}'.format(
+            args.include_coordinate_generation),
     ]
     fixture_data = None
     try:
@@ -154,6 +182,7 @@ def main():
         sampling = decoder_layer.sampling_lss_bev
         attention = sampling.attention
         captured = {}
+        captured_sampling = {}
 
         def capture_first(module, inputs):
             del module
@@ -166,23 +195,53 @@ def main():
                 captured[name] = tensor.detach().clone()
 
         handle = attention.register_forward_pre_hook(capture_first)
+
+        def capture_sampling_inputs(module, inputs):
+            del module
+            if captured_sampling:
+                return
+            captured_sampling.update({
+                'query_ray': inputs[0].detach().clone(),
+                'query_feat': inputs[1].detach().clone(),
+                'bev_feats': inputs[2].detach().clone(),
+                'time_diff': inputs[3][0]['time_diff'].detach().clone(),
+            })
+
+        sampling_handle = sampling.register_forward_pre_hook(
+            capture_sampling_inputs)
         try:
             with torch.no_grad():
                 wrapper(*model_inputs)
             torch.cuda.synchronize(runner.device)
         finally:
             handle.remove()
+            sampling_handle.remove()
         if list(captured) != PROBE_INPUT_NAMES:
             raise RuntimeError(
                 'did not capture all LSS attention inputs: {}'.format(
                     list(captured)))
 
+        if list(captured_sampling) != SAMPLING_INPUT_NAMES:
+            raise RuntimeError(
+                'did not capture all LSS sampling inputs: {}'.format(
+                    list(captured_sampling)))
+
         value = captured['value']
         spatial_shape = value.shape[-2:]
-        if args.include_scale_projection:
+        if args.include_coordinate_generation:
+            d_region = float(decoder_layer.d_region_list[0])
+            probe = LSSSamplingProbe(
+                sampling, d_region).to(runner.device).eval()
+            probe_input_names = SAMPLING_INPUT_NAMES
+            probe_output_names = ['sampling_output']
+            probe_inputs = tuple(
+                captured_sampling[name] for name in probe_input_names)
+            lines.append('LSS d_region: {:.8f}'.format(d_region))
+        elif args.include_scale_projection:
             probe = LSSProjectedAttentionProbe(
                 sampling, spatial_shape).to(runner.device).eval()
             probe_input_names = PROBE_INPUT_NAMES[:3]
+            probe_output_names = PROBE_OUTPUT_NAMES
             probe_inputs = tuple(
                 captured[name] for name in probe_input_names)
             with torch.no_grad():
@@ -200,6 +259,7 @@ def main():
             probe = LSSAttentionProbe(
                 attention, spatial_shape).to(runner.device).eval()
             probe_input_names = PROBE_INPUT_NAMES
+            probe_output_names = PROBE_OUTPUT_NAMES
             probe_inputs = tuple(
                 captured[name] for name in probe_input_names)
         with torch.no_grad():
@@ -210,7 +270,7 @@ def main():
         lines.extend(
             describe(name, tensor)
             for name, tensor in zip(probe_input_names, probe_inputs))
-        lines.append(describe(PROBE_OUTPUT_NAMES[0], probe_output))
+        lines.append(describe(probe_output_names[0], probe_output))
         lines.append(
             'spatial shape: {}'.format(tuple(int(v) for v in spatial_shape)))
 
@@ -220,7 +280,7 @@ def main():
             name: tensor.detach().cpu().numpy()
             for name, tensor in zip(probe_input_names, probe_inputs)
         }
-        arrays[PROBE_OUTPUT_NAMES[0]] = \
+        arrays[probe_output_names[0]] = \
             probe_output.detach().cpu().numpy()
         np.savez_compressed(fixture_path, **arrays)
 
@@ -234,7 +294,7 @@ def main():
             opset_version=args.opset,
             do_constant_folding=False,
             input_names=probe_input_names,
-            output_names=PROBE_OUTPUT_NAMES,
+            output_names=probe_output_names,
             verbose=False)
         onnx.checker.check_model(onnx.load(output_path))
         lines.extend([
