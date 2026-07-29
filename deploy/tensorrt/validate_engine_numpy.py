@@ -23,6 +23,9 @@ def parse_args():
     parser.add_argument('--atol', type=float, default=6e-3)
     parser.add_argument('--save-outputs')
     parser.add_argument(
+        '--skip-decode', action='store_true',
+        help='Validate arbitrary tensor outputs without detection decoding')
+    parser.add_argument(
         '--accept-decoded-match', action='store_true',
         help='Accept matching decoded detections when raw tensors exceed atol')
     return parser.parse_args()
@@ -328,33 +331,46 @@ def main():
             append_comparison_details(
                 lines, name, actual, reference, args.atol)
 
-        actual_decoded = decode_detections(
-            actual_outputs['all_cls_scores'],
-            actual_outputs['all_bbox_preds'])
-        reference_decoded = decode_detections(
-            fixture['all_cls_scores'], fixture['all_bbox_preds'])
-        actual_boxes, actual_scores, actual_labels = actual_decoded
-        ref_boxes, ref_scores, ref_labels = reference_decoded
-        boxes_match = actual_boxes.shape == ref_boxes.shape and np.allclose(
-            actual_boxes, ref_boxes, rtol=0.0, atol=args.atol)
-        scores_match = actual_scores.shape == ref_scores.shape and np.allclose(
-            actual_scores, ref_scores, rtol=0.0, atol=args.atol)
-        labels_match = np.array_equal(actual_labels, ref_labels)
-        decoded_passed = boxes_match and scores_match and labels_match
+        decoded_passed = None
+        if args.skip_decode:
+            lines.extend([
+                '', '=== Decoded detection comparison ===',
+                'skipped: True',
+            ])
+        else:
+            actual_decoded = decode_detections(
+                actual_outputs['all_cls_scores'],
+                actual_outputs['all_bbox_preds'])
+            reference_decoded = decode_detections(
+                fixture['all_cls_scores'], fixture['all_bbox_preds'])
+            actual_boxes, actual_scores, actual_labels = actual_decoded
+            ref_boxes, ref_scores, ref_labels = reference_decoded
+            boxes_match = \
+                actual_boxes.shape == ref_boxes.shape and np.allclose(
+                    actual_boxes, ref_boxes, rtol=0.0, atol=args.atol)
+            scores_match = \
+                actual_scores.shape == ref_scores.shape and np.allclose(
+                    actual_scores, ref_scores, rtol=0.0, atol=args.atol)
+            labels_match = np.array_equal(actual_labels, ref_labels)
+            decoded_passed = boxes_match and scores_match and labels_match
+            lines.extend([
+                '', '=== Decoded detection comparison ===',
+                'actual/reference detection count: {}/{}'.format(
+                    len(actual_boxes), len(ref_boxes)),
+                'boxes close: {}, max_abs_error={:.8f}'.format(
+                    boxes_match,
+                    np.abs(actual_boxes - ref_boxes).max()
+                    if actual_boxes.shape == ref_boxes.shape
+                    else float('inf')),
+                'scores close: {}, max_abs_error={:.8f}'.format(
+                    scores_match,
+                    np.abs(actual_scores - ref_scores).max()
+                    if actual_scores.shape == ref_scores.shape
+                    else float('inf')),
+                'labels equal: {}'.format(labels_match),
+                'decoded comparison passed: {}'.format(decoded_passed),
+            ])
         lines.extend([
-            '', '=== Decoded detection comparison ===',
-            'actual/reference detection count: {}/{}'.format(
-                len(actual_boxes), len(ref_boxes)),
-            'boxes close: {}, max_abs_error={:.8f}'.format(
-                boxes_match,
-                np.abs(actual_boxes - ref_boxes).max()
-                if actual_boxes.shape == ref_boxes.shape else float('inf')),
-            'scores close: {}, max_abs_error={:.8f}'.format(
-                scores_match,
-                np.abs(actual_scores - ref_scores).max()
-                if actual_scores.shape == ref_scores.shape else float('inf')),
-            'labels equal: {}'.format(labels_match),
-            'decoded comparison passed: {}'.format(decoded_passed),
             'atol: {}'.format(args.atol),
             '', '=== Performance ===',
             'engine GPU latency: {}'.format(stats(latencies)),
@@ -370,7 +386,7 @@ def main():
             lines.append('actual outputs: {}'.format(output_path))
 
         accepted = raw_passed or (
-            args.accept_decoded_match and decoded_passed)
+            args.accept_decoded_match and decoded_passed is True)
         lines.extend([
             '', '=== Acceptance ===',
             'raw tensor comparison passed: {}'.format(raw_passed),
