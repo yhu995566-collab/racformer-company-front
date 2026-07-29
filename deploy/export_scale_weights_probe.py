@@ -29,6 +29,8 @@ def parse_args():
     parser.add_argument('--weights', required=True)
     parser.add_argument('--device', default='cuda:0')
     parser.add_argument('--opset', type=int, default=17)
+    parser.add_argument('--repeats', type=int, default=1)
+    parser.add_argument('--sample-elements', type=int, default=0)
     parser.add_argument('--out', required=True)
     parser.add_argument('--fixture', required=True)
     parser.add_argument('--report', required=True)
@@ -37,8 +39,10 @@ def parse_args():
 
 class ScaleWeightsProbe(nn.Module):
 
-    def __init__(self, decoder_layer):
+    def __init__(self, decoder_layer, repeats=1, sample_elements=0):
         super().__init__()
+        self.repeats = repeats
+        self.sample_elements = sample_elements
         self.radar = copy.deepcopy(
             decoder_layer.sampling_radar_bev.scale_weights)
         self.lss = copy.deepcopy(
@@ -83,7 +87,7 @@ class ScaleWeightsProbe(nn.Module):
         return weights.reshape(
             batch * groups * frames, queries, depth * points, levels)
 
-    def forward(self, query_feat):
+    def forward_once(self, query_feat):
         radar_logits = self.radar(query_feat)
         lss_logits = self.lss(query_feat)
         image_logits = self.image(query_feat)
@@ -95,6 +99,24 @@ class ScaleWeightsProbe(nn.Module):
             image_logits,
             self.image_weights(image_logits, self.image_shape),
         )
+
+    def sample(self, tensor):
+        if self.sample_elements <= 0:
+            return tensor
+        return tensor.reshape(-1)[:self.sample_elements]
+
+    def forward(self, query_feat):
+        if self.repeats == 1:
+            return tuple(
+                self.sample(tensor)
+                for tensor in self.forward_once(query_feat))
+
+        repeated_outputs = [[] for _ in OUTPUT_NAMES]
+        for repeat in range(self.repeats):
+            outputs = self.forward_once(query_feat[repeat])
+            for values, tensor in zip(repeated_outputs, outputs):
+                values.append(self.sample(tensor))
+        return tuple(torch.stack(values) for values in repeated_outputs)
 
 
 def write_report(path, lines):
@@ -108,25 +130,36 @@ def write_report(path, lines):
 
 def main():
     args = parse_args()
+    if args.repeats <= 0:
+        raise ValueError('repeats must be positive')
+    if args.sample_elements < 0:
+        raise ValueError('sample-elements must be non-negative')
     lines = [
         '=== RaCFormer scale-weight ONNX probe ===',
         'config: {}'.format(os.path.abspath(args.config)),
         'weights: {}'.format(os.path.abspath(args.weights)),
         'device: {}'.format(args.device),
         'opset: {}'.format(args.opset),
+        'repeats: {}'.format(args.repeats),
+        'sample elements per output: {}'.format(args.sample_elements),
     ]
     try:
         runner = RaCFormerPyTorchRunner(
             args.config, args.weights, device=args.device)
         decoder_layer = runner.model.pts_bbox_head.transformer.decoder \
             .decoder_layer
-        probe = ScaleWeightsProbe(decoder_layer).to(runner.device).eval()
+        probe = ScaleWeightsProbe(
+            decoder_layer, repeats=args.repeats,
+            sample_elements=args.sample_elements).to(runner.device).eval()
         num_query = int(runner.model.pts_bbox_head.num_query)
         embed_dims = int(decoder_layer.embed_dims)
         generator = torch.Generator(device=runner.device)
         generator.manual_seed(20260729)
+        query_shape = (1, num_query, embed_dims)
+        if args.repeats > 1:
+            query_shape = (args.repeats,) + query_shape
         query_feat = torch.randn(
-            (1, num_query, embed_dims), generator=generator,
+            query_shape, generator=generator,
             device=runner.device, dtype=torch.float32)
 
         with torch.no_grad():
