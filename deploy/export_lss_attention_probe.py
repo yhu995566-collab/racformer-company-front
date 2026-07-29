@@ -16,6 +16,7 @@ from deploy.export_onnx import (
     enable_fixed_view_geometry,
     enable_single_batch_radar_scatter,
     enable_standard_onnx_fallbacks,
+    install_export_symbolics,
 )
 from deploy.onnx_wrapper import INPUT_NAMES, RaCFormerONNXWrapper
 from deploy.pytorch_runner import RaCFormerPyTorchRunner
@@ -286,6 +287,7 @@ def main():
 
         output_path = os.path.abspath(args.out)
         os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
+        install_export_symbolics(args.opset, tensorrt_85_compat=True)
         torch.onnx.export(
             probe,
             probe_inputs,
