@@ -40,9 +40,13 @@ PROBE_INPUT_NAMES = [
     'time_diff',
     'velocity_time_diff',
 ]
-PROBE_OUTPUT_NAMES = [
+RAW_OUTPUT_NAMES = [
     'decoder_cls_scores',
     'decoder_bbox_preds',
+]
+DETECTION_OUTPUT_NAMES = [
+    'all_cls_scores',
+    'all_bbox_preds',
 ]
 
 
@@ -54,6 +58,7 @@ def parse_args():
     parser.add_argument('--device', default='cuda:0')
     parser.add_argument('--opset', type=int, default=17)
     parser.add_argument('--decoder-barriers', action='store_true')
+    parser.add_argument('--detection-outputs', action='store_true')
     parser.add_argument('--out', required=True)
     parser.add_argument('--fixture', required=True)
     parser.add_argument('--report', required=True)
@@ -64,7 +69,8 @@ class DecoderStackProbe(nn.Module):
 
     def __init__(
             self, decoder_layer, num_layers, pc_range,
-            image_height, image_width, use_decoder_barriers=False):
+            image_height, image_width, use_decoder_barriers=False,
+            detection_outputs=False):
         super().__init__()
         self.decoder_layer = copy.deepcopy(decoder_layer)
         self.num_layers = int(num_layers)
@@ -72,6 +78,7 @@ class DecoderStackProbe(nn.Module):
         self.image_height = int(image_height)
         self.image_width = int(image_width)
         self.use_decoder_barriers = bool(use_decoder_barriers)
+        self.detection_outputs = bool(detection_outputs)
 
     def forward(
             self, query_bbox, query_feat,
@@ -109,7 +116,25 @@ class DecoderStackProbe(nn.Module):
             cls_scores.append(cls_score)
             bbox_preds.append(theta_d2xy_coods(
                 bbox_pred, self.pc_range))
-        return torch.stack(cls_scores), torch.stack(bbox_preds)
+        cls_scores = torch.stack(cls_scores)
+        bbox_preds = torch.stack(bbox_preds)
+        if not self.detection_outputs:
+            return cls_scores, bbox_preds
+
+        x = bbox_preds[..., 0:1] * (
+            self.pc_range[3] - self.pc_range[0]) + self.pc_range[0]
+        y = bbox_preds[..., 1:2] * (
+            self.pc_range[4] - self.pc_range[1]) + self.pc_range[1]
+        z = bbox_preds[..., 2:3] * (
+            self.pc_range[5] - self.pc_range[2]) + self.pc_range[2]
+        bbox_preds = torch.cat([
+            x,
+            y,
+            bbox_preds[..., 3:5],
+            z,
+            bbox_preds[..., 5:10],
+        ], dim=-1)
+        return cls_scores, bbox_preds
 
 
 def write_report(path, lines):
@@ -136,6 +161,7 @@ def main():
         'device: {}'.format(args.device),
         'opset: {}'.format(args.opset),
         'decoder barriers: {}'.format(args.decoder_barriers),
+        'detection outputs: {}'.format(args.detection_outputs),
     ]
     fixture_data = None
     try:
@@ -209,9 +235,13 @@ def main():
             decoder.pc_range,
             image_height,
             image_width,
-            use_decoder_barriers=args.decoder_barriers).to(
+            use_decoder_barriers=args.decoder_barriers,
+            detection_outputs=args.detection_outputs).to(
                 runner.device).eval()
         probe_inputs = tuple(captured[name] for name in PROBE_INPUT_NAMES)
+        output_names = (
+            DETECTION_OUTPUT_NAMES
+            if args.detection_outputs else RAW_OUTPUT_NAMES)
         with torch.no_grad():
             probe_outputs = probe(*probe_inputs)
         torch.cuda.synchronize(runner.device)
@@ -226,7 +256,7 @@ def main():
             for name, tensor in zip(PROBE_INPUT_NAMES, probe_inputs))
         lines.extend(
             describe(name, tensor)
-            for name, tensor in zip(PROBE_OUTPUT_NAMES, probe_outputs))
+            for name, tensor in zip(output_names, probe_outputs))
 
         fixture_path = os.path.abspath(args.fixture)
         os.makedirs(os.path.dirname(fixture_path) or '.', exist_ok=True)
@@ -236,7 +266,7 @@ def main():
         }
         arrays.update({
             name: tensor.detach().cpu().numpy()
-            for name, tensor in zip(PROBE_OUTPUT_NAMES, probe_outputs)
+            for name, tensor in zip(output_names, probe_outputs)
         })
         np.savez_compressed(fixture_path, **arrays)
 
@@ -251,7 +281,7 @@ def main():
             opset_version=args.opset,
             do_constant_folding=False,
             input_names=PROBE_INPUT_NAMES,
-            output_names=PROBE_OUTPUT_NAMES,
+            output_names=output_names,
             verbose=False)
         onnx.checker.check_model(onnx.load(output_path))
         lines.extend([
