@@ -21,6 +21,7 @@ from deploy.export_onnx import (
 from deploy.onnx_wrapper import INPUT_NAMES, RaCFormerONNXWrapper
 from deploy.pytorch_runner import RaCFormerPyTorchRunner
 from models.bbox.utils import theta_d2xy_coods
+from models.csrc.tensorrt_barrier import tensorrt_fusion_barrier
 
 
 FEATURE_INPUT_NAMES = [
@@ -52,6 +53,7 @@ def parse_args():
     parser.add_argument('--model-fixture', required=True)
     parser.add_argument('--device', default='cuda:0')
     parser.add_argument('--opset', type=int, default=17)
+    parser.add_argument('--decoder-barriers', action='store_true')
     parser.add_argument('--out', required=True)
     parser.add_argument('--fixture', required=True)
     parser.add_argument('--report', required=True)
@@ -62,13 +64,14 @@ class DecoderStackProbe(nn.Module):
 
     def __init__(
             self, decoder_layer, num_layers, pc_range,
-            image_height, image_width):
+            image_height, image_width, use_decoder_barriers=False):
         super().__init__()
         self.decoder_layer = copy.deepcopy(decoder_layer)
         self.num_layers = int(num_layers)
         self.pc_range = list(pc_range)
         self.image_height = int(image_height)
         self.image_width = int(image_width)
+        self.use_decoder_barriers = bool(use_decoder_barriers)
 
     def forward(
             self, query_bbox, query_feat,
@@ -100,6 +103,9 @@ class DecoderStackProbe(nn.Module):
                 img_metas,
                 layer=index)
             query_bbox = bbox_pred.clone().detach()
+            if self.use_decoder_barriers and index + 1 < self.num_layers:
+                query_feat = tensorrt_fusion_barrier(query_feat)
+                query_bbox = tensorrt_fusion_barrier(query_bbox)
             cls_scores.append(cls_score)
             bbox_preds.append(theta_d2xy_coods(
                 bbox_pred, self.pc_range))
@@ -129,6 +135,7 @@ def main():
         'model fixture: {}'.format(os.path.abspath(args.model_fixture)),
         'device: {}'.format(args.device),
         'opset: {}'.format(args.opset),
+        'decoder barriers: {}'.format(args.decoder_barriers),
     ]
     fixture_data = None
     try:
@@ -201,7 +208,9 @@ def main():
             decoder.num_layers,
             decoder.pc_range,
             image_height,
-            image_width).to(runner.device).eval()
+            image_width,
+            use_decoder_barriers=args.decoder_barriers).to(
+                runner.device).eval()
         probe_inputs = tuple(captured[name] for name in PROBE_INPUT_NAMES)
         with torch.no_grad():
             probe_outputs = probe(*probe_inputs)
