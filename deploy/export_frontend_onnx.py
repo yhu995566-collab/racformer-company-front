@@ -24,6 +24,9 @@ from deploy.export_onnx import (
 )
 from deploy.onnx_wrapper import INPUT_NAMES
 from deploy.pytorch_runner import RaCFormerPyTorchRunner
+from deploy.tensorrt.rewrite_trt85_onnx import (
+    rewrite_trt85_unsupported_nodes,
+)
 
 
 FRONTEND_OUTPUT_NAMES = [
@@ -241,14 +244,27 @@ def main():
             input_names=INPUT_NAMES,
             output_names=FRONTEND_OUTPUT_NAMES,
             verbose=False)
+        rewrite_result = rewrite_trt85_unsupported_nodes(
+            output_path, output_path)
         model = onnx.load(output_path)
         onnx.checker.check_model(model)
+        if (rewrite_result['isinf_remaining'] or
+                rewrite_result['layernorm_remaining']):
+            raise RuntimeError(
+                'TensorRT 8.5 unsupported operators remain after rewrite')
         graph_outputs = [value.name for value in model.graph.output]
         if graph_outputs != FRONTEND_OUTPUT_NAMES:
             raise RuntimeError(
                 'unexpected frontend outputs: {}'.format(graph_outputs))
         lines.extend([
             '',
+            '=== TensorRT 8.5 compatibility ===',
+            'IsInf nodes rewritten: {}'.format(
+                rewrite_result['isinf_rewritten']),
+            'IsInf nodes remaining: {}'.format(
+                rewrite_result['isinf_remaining']),
+            'LayerNormalization nodes remaining: {}'.format(
+                rewrite_result['layernorm_remaining']),
             'fixture: {}'.format(fixture_path),
             'onnx: {}'.format(output_path),
             'frontend output boundary: PASS',
