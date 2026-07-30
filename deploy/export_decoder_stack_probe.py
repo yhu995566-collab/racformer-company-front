@@ -58,6 +58,7 @@ def parse_args():
     parser.add_argument('--device', default='cuda:0')
     parser.add_argument('--opset', type=int, default=17)
     parser.add_argument('--decoder-barriers', action='store_true')
+    parser.add_argument('--scale-linear-barriers', action='store_true')
     parser.add_argument('--detection-outputs', action='store_true')
     parser.add_argument('--out', required=True)
     parser.add_argument('--fixture', required=True)
@@ -70,7 +71,7 @@ class DecoderStackProbe(nn.Module):
     def __init__(
             self, decoder_layer, num_layers, pc_range,
             image_height, image_width, use_decoder_barriers=False,
-            detection_outputs=False):
+            use_scale_linear_barriers=False, detection_outputs=False):
         super().__init__()
         self.decoder_layer = copy.deepcopy(decoder_layer)
         self.num_layers = int(num_layers)
@@ -79,6 +80,13 @@ class DecoderStackProbe(nn.Module):
         self.image_width = int(image_width)
         self.use_decoder_barriers = bool(use_decoder_barriers)
         self.detection_outputs = bool(detection_outputs)
+        if use_scale_linear_barriers:
+            self.decoder_layer.sampling \
+                ._deploy_trt_scale_linear_barrier = True
+            self.decoder_layer.sampling_lss_bev \
+                ._deploy_trt_scale_linear_barrier = True
+            self.decoder_layer.sampling_radar_bev \
+                ._deploy_trt_scale_linear_barrier = True
 
     def forward(
             self, query_bbox, query_feat,
@@ -161,6 +169,8 @@ def main():
         'device: {}'.format(args.device),
         'opset: {}'.format(args.opset),
         'decoder barriers: {}'.format(args.decoder_barriers),
+        'scale Linear-to-Reshape barriers: {}'.format(
+            args.scale_linear_barriers),
         'detection outputs: {}'.format(args.detection_outputs),
     ]
     fixture_data = None
@@ -236,6 +246,7 @@ def main():
             image_height,
             image_width,
             use_decoder_barriers=args.decoder_barriers,
+            use_scale_linear_barriers=args.scale_linear_barriers,
             detection_outputs=args.detection_outputs).to(
                 runner.device).eval()
         probe_inputs = tuple(captured[name] for name in PROBE_INPUT_NAMES)
