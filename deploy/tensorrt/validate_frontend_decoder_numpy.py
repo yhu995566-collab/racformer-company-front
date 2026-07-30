@@ -176,6 +176,7 @@ def main():
                 'decoder engine is missing tensors: {}'.format(
                     sorted(missing)))
 
+        decoder_direct_inputs = {}
         for name in decoder_names:
             if decoder_engine.get_tensor_mode(name) != \
                     trt.TensorIOMode.INPUT:
@@ -186,6 +187,12 @@ def main():
                 shape = frontend_output_shapes[name]
             elif name in frontend_inputs:
                 shape = frontend_inputs[name].shape
+            elif name in fixture:
+                dtype = numpy_dtype(
+                    trt, decoder_engine.get_tensor_dtype(name))
+                array = np.ascontiguousarray(fixture[name], dtype=dtype)
+                decoder_direct_inputs[name] = array
+                shape = array.shape
             else:
                 raise RuntimeError(
                     'no frontend source for decoder input {}'.format(name))
@@ -197,6 +204,15 @@ def main():
             raise RuntimeError(
                 'decoder shape inference needs: {}'.format(shape_inputs))
 
+        decoder_direct_pointers = {}
+        for name, array in decoder_direct_inputs.items():
+            pointer = allocate(array.nbytes)
+            decoder_direct_pointers[name] = pointer
+            cuda.check(cuda.lib.cudaMemcpyAsync(
+                pointer, ctypes.c_void_p(array.ctypes.data), array.nbytes,
+                CUDA_MEMCPY_HOST_TO_DEVICE, stream),
+                'decoder-only input H2D')
+
         for name in decoder_names:
             if decoder_engine.get_tensor_mode(name) != \
                     trt.TensorIOMode.INPUT:
@@ -205,8 +221,10 @@ def main():
                 continue
             if name in frontend_output_pointers:
                 pointer = frontend_output_pointers[name]
-            else:
+            elif name in frontend_input_pointers:
                 pointer = frontend_input_pointers[name]
+            else:
+                pointer = decoder_direct_pointers[name]
             if not decoder_context.set_tensor_address(name, pointer.value):
                 raise RuntimeError(
                     'failed to bind decoder input {}'.format(name))
