@@ -10,6 +10,12 @@ import onnx
 import torch
 from torch import nn
 
+from deploy.bev_precompute import (
+    PRECOMPUTED_BEV_INPUT_NAMES,
+    RAW_BEV_INPUT_NAMES,
+    enable_precomputed_bev_values,
+    precompute_bev_values,
+)
 from deploy.export_decoder_stack_probe import (
     DETECTION_OUTPUT_NAMES,
     FEATURE_INPUT_NAMES,
@@ -29,13 +35,10 @@ from deploy.tensorrt.rewrite_trt85_onnx import (
 )
 
 
-FRONTEND_OUTPUT_NAMES = [
+FRONTEND_BASE_OUTPUT_NAMES = [
     'query_bbox',
     'query_feat',
-] + FEATURE_INPUT_NAMES + [
-    'lss_bev_feats',
-    'radar_bev_feats',
-]
+] + FEATURE_INPUT_NAMES
 
 
 def parse_args():
@@ -45,6 +48,7 @@ def parse_args():
     parser.add_argument('--model-fixture', required=True)
     parser.add_argument('--device', default='cuda:0')
     parser.add_argument('--opset', type=int, default=17)
+    parser.add_argument('--precompute-bev-values', action='store_true')
     parser.add_argument('--out', required=True)
     parser.add_argument('--fixture', required=True)
     parser.add_argument('--report', required=True)
@@ -53,13 +57,17 @@ def parse_args():
 
 class RaCFormerFrontendONNXWrapper(nn.Module):
 
-    def __init__(self, model, image_height, image_width):
+    def __init__(
+            self, model, image_height, image_width,
+            precompute_values=False):
         super().__init__()
         self.model = model
         self.image_height = int(image_height)
         self.image_width = int(image_width)
         decoder = model.pts_bbox_head.transformer.decoder
         self.num_cams = int(decoder.num_cams)
+        self.decoder_layer = decoder.decoder_layer
+        self.precompute_values = bool(precompute_values)
 
     def forward(
             self, image, radar_depth, radar_rcs, lidar2img, img2lidar,
@@ -119,6 +127,10 @@ class RaCFormerFrontendONNXWrapper(nn.Module):
         query_feat = torch.cat([query_feat, indicator], dim=1)
         query_feat = query_feat.repeat(batch, 1, 1)
 
+        if self.precompute_values:
+            lss_bev_feats, radar_bev_feats = precompute_bev_values(
+                self.decoder_layer, lss_bev_feats, radar_bev_feats)
+
         return tuple([
             query_bbox,
             query_feat,
@@ -151,6 +163,8 @@ def main():
         'model fixture: {}'.format(os.path.abspath(args.model_fixture)),
         'device: {}'.format(args.device),
         'opset: {}'.format(args.opset),
+        'precompute BEV values: {}'.format(
+            args.precompute_bev_values),
     ]
     fixture_data = None
     try:
@@ -178,12 +192,19 @@ def main():
         image_height = int(model_inputs[0].shape[-2])
         image_width = int(model_inputs[0].shape[-1])
         frontend = RaCFormerFrontendONNXWrapper(
-            runner.model, image_height, image_width).eval()
+            runner.model, image_height, image_width,
+            precompute_values=args.precompute_bev_values).eval()
         decoder = runner.model.pts_bbox_head.transformer.decoder
         decoder_stack = DecoderStackProbe(
             decoder.decoder_layer, decoder.num_layers, decoder.pc_range,
             image_height, image_width,
             detection_outputs=True).to(runner.device).eval()
+        if args.precompute_bev_values:
+            enable_precomputed_bev_values(decoder_stack.decoder_layer)
+        bev_names = (
+            PRECOMPUTED_BEV_INPUT_NAMES
+            if args.precompute_bev_values else RAW_BEV_INPUT_NAMES)
+        frontend_output_names = FRONTEND_BASE_OUTPUT_NAMES + bev_names
         with torch.no_grad():
             frontend_outputs = frontend(*model_inputs)
             decoder_inputs = frontend_outputs + (
@@ -209,7 +230,7 @@ def main():
         lines.extend(
             describe(name, tensor)
             for name, tensor in zip(
-                FRONTEND_OUTPUT_NAMES, frontend_outputs))
+                frontend_output_names, frontend_outputs))
 
         fixture_path = os.path.abspath(args.fixture)
         os.makedirs(os.path.dirname(fixture_path) or '.', exist_ok=True)
@@ -220,7 +241,7 @@ def main():
         arrays.update({
             name: tensor.detach().cpu().numpy()
             for name, tensor in zip(
-                FRONTEND_OUTPUT_NAMES, frontend_outputs)
+                frontend_output_names, frontend_outputs)
         })
         arrays['decoder_d_regions'] = d_regions
         arrays['decoder_pc_range'] = pc_range
@@ -242,7 +263,7 @@ def main():
             opset_version=args.opset,
             do_constant_folding=False,
             input_names=INPUT_NAMES,
-            output_names=FRONTEND_OUTPUT_NAMES,
+            output_names=frontend_output_names,
             verbose=False)
         rewrite_result = rewrite_trt85_unsupported_nodes(
             output_path, output_path)
@@ -253,7 +274,7 @@ def main():
             raise RuntimeError(
                 'TensorRT 8.5 unsupported operators remain after rewrite')
         graph_outputs = [value.name for value in model.graph.output]
-        if graph_outputs != FRONTEND_OUTPUT_NAMES:
+        if graph_outputs != frontend_output_names:
             raise RuntimeError(
                 'unexpected frontend outputs: {}'.format(graph_outputs))
         lines.extend([

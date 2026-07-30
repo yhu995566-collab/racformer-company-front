@@ -137,6 +137,16 @@ class BEVSelfAttention(BaseModule):
             xavier_init(self.bev_queue_weight, distribution='uniform', bias=0.)
         self._is_init = True
 
+    def project_value(self, value):
+        """Prepare the query-independent value used by BEV attention."""
+        channels = value.shape[2]
+        value = value.view(
+            -1, channels, value.shape[-2] * value.shape[-1])
+        value = value.permute(0, 2, 1)
+        if not self.batch_first:
+            value = value.permute(1, 0, 2)
+        return self.value_proj(value)
+
 
     def forward(self,
                 query,
@@ -186,13 +196,8 @@ class BEVSelfAttention(BaseModule):
         if identity is None:
             identity = query
         bs,  num_query, _ = query.shape
-        if value is not None:
-            value = value.view(
-                B*self.num_bev_queue, C, -1).permute(0, 2, 1)
-            if not self.batch_first:
-                value = value.permute(1, 0, 2)
-
-        value = self.value_proj(value)
+        if not getattr(self, '_deploy_value_preprojected', False):
+            value = self.project_value(value)
         _, num_value, _ = value.shape
 
         if key_padding_mask is not None:

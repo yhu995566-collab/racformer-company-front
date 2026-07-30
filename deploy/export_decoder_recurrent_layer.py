@@ -11,6 +11,11 @@ import onnx
 import torch
 from torch import nn
 
+from deploy.bev_precompute import (
+    PRECOMPUTED_BEV_INPUT_NAMES,
+    enable_precomputed_bev_values,
+    precompute_bev_values,
+)
 from deploy.export_decoder_stack_probe import (
     DETECTION_OUTPUT_NAMES,
     FEATURE_INPUT_NAMES,
@@ -29,7 +34,11 @@ from deploy.pytorch_runner import RaCFormerPyTorchRunner
 from models.bbox.utils import theta_d2xy_coods
 
 
-RECURRENT_INPUT_NAMES = STACK_INPUT_NAMES + ['d_region']
+PRECOMPUTED_STACK_INPUT_NAMES = (
+    STACK_INPUT_NAMES[:2 + len(FEATURE_INPUT_NAMES)]
+    + PRECOMPUTED_BEV_INPUT_NAMES
+    + STACK_INPUT_NAMES[4 + len(FEATURE_INPUT_NAMES):]
+)
 RECURRENT_OUTPUT_NAMES = [
     'next_query_feat',
     'cls_score',
@@ -44,6 +53,7 @@ def parse_args():
     parser.add_argument('--model-fixture', required=True)
     parser.add_argument('--device', default='cuda:0')
     parser.add_argument('--opset', type=int, default=17)
+    parser.add_argument('--precompute-bev-values', action='store_true')
     parser.add_argument('--out', required=True)
     parser.add_argument('--fixture', required=True)
     parser.add_argument('--report', required=True)
@@ -52,9 +62,13 @@ def parse_args():
 
 class RecurrentDecoderLayer(nn.Module):
 
-    def __init__(self, decoder_layer, image_height, image_width):
+    def __init__(
+            self, decoder_layer, image_height, image_width,
+            precompute_values=False):
         super().__init__()
         self.decoder_layer = copy.deepcopy(decoder_layer)
+        if precompute_values:
+            enable_precomputed_bev_values(self.decoder_layer)
         self.image_height = int(image_height)
         self.image_width = int(image_width)
 
@@ -123,6 +137,8 @@ def main():
         'model fixture: {}'.format(os.path.abspath(args.model_fixture)),
         'device: {}'.format(args.device),
         'opset: {}'.format(args.opset),
+        'precompute BEV values: {}'.format(
+            args.precompute_bev_values),
     ]
     fixture_data = None
     try:
@@ -191,14 +207,30 @@ def main():
             raise RuntimeError(
                 'did not capture decoder inputs: {}'.format(missing))
 
+        if args.precompute_bev_values:
+            lss_value, radar_value = precompute_bev_values(
+                decoder.decoder_layer,
+                captured['lss_bev_feats'],
+                captured['radar_bev_feats'])
+            captured['lss_bev_value'] = lss_value
+            captured['radar_bev_value'] = radar_value
+        shared_input_names = (
+            PRECOMPUTED_STACK_INPUT_NAMES
+            if args.precompute_bev_values else STACK_INPUT_NAMES)
+        recurrent_input_names = shared_input_names + ['d_region']
+
         recurrent = RecurrentDecoderLayer(
             decoder.decoder_layer, image_height,
-            image_width).to(runner.device).eval()
+            image_width,
+            precompute_values=args.precompute_bev_values).to(
+                runner.device).eval()
         stack = DecoderStackProbe(
             decoder.decoder_layer, decoder.num_layers, decoder.pc_range,
             image_height, image_width,
             detection_outputs=True).to(runner.device).eval()
         shared_inputs = tuple(
+            captured[name] for name in shared_input_names)
+        reference_inputs = tuple(
             captured[name] for name in STACK_INPUT_NAMES)
         d_regions = torch.as_tensor(
             decoder.decoder_layer.d_region_list,
@@ -223,7 +255,7 @@ def main():
                 torch.stack(recurrent_cls),
                 torch.stack(recurrent_bbox),
             )
-            reference_outputs = stack(*shared_inputs)
+            reference_outputs = stack(*reference_inputs)
         torch.cuda.synchronize(runner.device)
         loop_errors = [
             float((actual - reference).abs().max())
@@ -252,7 +284,7 @@ def main():
         lines.extend(
             describe(name, tensor)
             for name, tensor in zip(
-                RECURRENT_INPUT_NAMES, export_inputs))
+                recurrent_input_names, export_inputs))
         lines.extend(
             describe(name, tensor)
             for name, tensor in zip(
@@ -262,7 +294,7 @@ def main():
         os.makedirs(os.path.dirname(fixture_path) or '.', exist_ok=True)
         arrays = {
             name: tensor.detach().cpu().numpy()
-            for name, tensor in zip(STACK_INPUT_NAMES, shared_inputs)
+            for name, tensor in zip(shared_input_names, shared_inputs)
         }
         arrays['decoder_d_regions'] = d_regions.detach().cpu().numpy()
         arrays['decoder_pc_range'] = np.asarray(
@@ -284,7 +316,7 @@ def main():
             export_params=True,
             opset_version=args.opset,
             do_constant_folding=False,
-            input_names=RECURRENT_INPUT_NAMES,
+            input_names=recurrent_input_names,
             output_names=RECURRENT_OUTPUT_NAMES,
             verbose=False)
         model = onnx.load(output_path)

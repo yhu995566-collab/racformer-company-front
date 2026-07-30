@@ -568,17 +568,43 @@ class BEVSampling(BaseModule):
         if self.temp_radar:
             self.temporal_encoder.init_weights()
 
+    def precompute_attention_value(self, bev_feats):
+        """Compute the BEV value shared by every recurrent decoder step."""
+        if self.temp_radar:
+            bev_feats = self.temporal_encoder(bev_feats)
+
+        batch, frames, _, bev_h, bev_w = bev_feats.shape
+        if frames != self.num_frames:
+            raise ValueError(
+                'expected {} BEV frames, got {}'.format(
+                    self.num_frames, frames))
+        bev_pos = getattr(self, '_deploy_bev_pos_cache', None)
+        if bev_pos is None:
+            bev_mask = torch.zeros(
+                (batch, bev_h, bev_w), device=bev_feats.device,
+                dtype=bev_feats.dtype)
+            bev_pos = self.positional_encoding(bev_mask).to(bev_feats.dtype)
+        bev_pos = bev_pos.view(
+            batch, 1, self.embed_dims, bev_h, bev_w).repeat(
+                1, self.num_frames, 1, 1, 1)
+        return self.attention.project_value(bev_feats + bev_pos)
+
 
     def inner_forward(self, query_ray, query_feat, bev_feats, img_metas, d_region=0.1):
         '''
         query_bbox: [B, Q, 10]
         query_feat: [B, Q, C]
         '''
-        if self.temp_radar:
+        value_preprojected = getattr(
+            self, '_deploy_value_preprojected', False)
+        if self.temp_radar and not value_preprojected:
             bev_feats = self.temporal_encoder(bev_feats)
         
         B, Q, M = query_ray.shape
-        bev_h, bev_w = bev_feats.shape[-2:]
+        if value_preprojected:
+            bev_h, bev_w = self.spatial_shapes
+        else:
+            bev_h, bev_w = bev_feats.shape[-2:]
 
         query_bbox = theta_d2xy_coods(query_ray, self.pc_range).clone()
 
@@ -657,7 +683,9 @@ class BEVSampling(BaseModule):
         skip_value_preparation = (
             getattr(value_proj, '_deploy_skip_input_preparation', False)
             and getattr(value_proj, '_deploy_output_cache_hit', False))
-        if skip_value_preparation:
+        if value_preprojected:
+            attention_value = bev_feats
+        elif skip_value_preparation:
             attention_value = None
         else:
             bev_pos = getattr(self, '_deploy_bev_pos_cache', None)
