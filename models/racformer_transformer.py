@@ -264,7 +264,10 @@ class RaCFormerTransformerDecoderLayer(BaseModule):
         return torch.cat([theta, dz_new, bbox_delta[..., 3:]], dim=-1)
 
 
-    def forward(self, query_bbox, query_feat, mlvl_feats, lss_bev_feats, radar_bev_feats, attn_mask, img_metas, layer=0):
+    def forward(
+            self, query_bbox, query_feat, mlvl_feats, lss_bev_feats,
+            radar_bev_feats, attn_mask, img_metas, layer=0,
+            d_region_override=None):
         """
         query_bbox: [B, Q, 10] [cx, cy, cz, w, h, d, rot.sin, rot.cos, vx, vy]
         """
@@ -284,13 +287,22 @@ class RaCFormerTransformerDecoderLayer(BaseModule):
             radar_query_bbox = lss_query_bbox = image_query_bbox = query_bbox
             radar_query_feat = lss_query_feat = image_query_feat = query_feat
 
-        query_radar_feat = self.sampling_radar_bev(radar_query_bbox, radar_query_feat, radar_bev_feats, img_metas, d_region=self.d_region_list[layer]) # here
+        d_region = (
+            self.d_region_list[layer]
+            if d_region_override is None else d_region_override)
+        query_radar_feat = self.sampling_radar_bev(
+            radar_query_bbox, radar_query_feat, radar_bev_feats, img_metas,
+            d_region=d_region)
         query_radar_feat = self.norm_radar_bev(query_radar_feat)
-        query_lss_feat = self.sampling_lss_bev(lss_query_bbox, lss_query_feat, lss_bev_feats, img_metas, d_region=self.d_region_list[layer]) # here
+        query_lss_feat = self.sampling_lss_bev(
+            lss_query_bbox, lss_query_feat, lss_bev_feats, img_metas,
+            d_region=d_region)
         query_lss_feat = self.norm_lss_bev(query_lss_feat)
 
 
-        sampled_feat = self.sampling(image_query_bbox, image_query_feat, mlvl_feats, img_metas, d_region=self.d_region_list[layer])
+        sampled_feat = self.sampling(
+            image_query_bbox, image_query_feat, mlvl_feats, img_metas,
+            d_region=d_region)
 
         query_feat = self.norm2(self.mixing(sampled_feat, query_feat))
         if getattr(self, '_deploy_trt_branch_barriers', False):
@@ -452,7 +464,18 @@ class RaCFormerSampling(BaseModule):
         
         sampling_points = xy2theta_d_coods(sampling_points, self.pc_range)
         sampling_points = sampling_points.reshape(B, Q, self.num_frames, self.num_groups, self.num_points, self.depth_num, 3)
-        sampling_points_d = torch.linspace(-d_region, d_region, self.depth_num).view(1,1,self.depth_num).repeat(B, Q, 1).to(query_bbox.device)
+        if torch.is_tensor(d_region):
+            depth_grid = torch.linspace(
+                -1.0, 1.0, self.depth_num, device=query_bbox.device,
+                dtype=query_bbox.dtype)
+            sampling_points_d = (
+                depth_grid * d_region.reshape(-1)[0]).view(
+                    1, 1, self.depth_num).repeat(B, Q, 1)
+        else:
+            sampling_points_d = torch.linspace(
+                -d_region, d_region, self.depth_num).view(
+                    1, 1, self.depth_num).repeat(B, Q, 1).to(
+                        query_bbox.device)
         sampling_points_d = sampling_points_d + (self.ray_points_offset(query_feat).sigmoid()*2-1)*d_region/self.depth_num/2
         sampling_points_d = sampling_points_d.view(B, Q, 1, 1, 1, self.depth_num, 1).repeat(1, 1, self.num_frames, self.num_groups, self.num_points, 1, 1)
 
@@ -584,7 +607,14 @@ class BEVSampling(BaseModule):
         
         sampling_points = sampling_points.reshape(B, Q, self.num_frames, self.num_heads, self.num_points, self.depth_num, 2)
         depth_grid_cache = getattr(self, '_deploy_depth_grid_cache', None)
-        if depth_grid_cache is None:
+        if torch.is_tensor(d_region):
+            depth_grid = torch.linspace(
+                -1.0, 1.0, self.depth_num, device=query_bbox.device,
+                dtype=query_bbox.dtype)
+            sampling_points_d = (
+                depth_grid * d_region.reshape(-1)[0]).view(
+                    1, 1, self.depth_num).repeat(B, Q, 1)
+        elif depth_grid_cache is None:
             sampling_points_d = torch.linspace(
                 -d_region, d_region, self.depth_num).view(
                     1, 1, self.depth_num).repeat(B, Q, 1).to(
