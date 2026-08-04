@@ -36,6 +36,10 @@ def parse_args():
     parser.add_argument('--iters', type=int, default=10)
     parser.add_argument('--atol', type=float, default=6e-3)
     parser.add_argument('--accept-decoded-match', action='store_true')
+    parser.add_argument(
+        '--initial-query-from-fixture', action='store_true',
+        help='Keep the learned initial query state in FP32 outside the '
+             'frontend engine')
     parser.add_argument('--save-outputs')
     return parser.parse_args()
 
@@ -72,6 +76,8 @@ def main():
             os.path.abspath(args.decoder_engine)),
         'fixture: {}'.format(os.path.abspath(args.fixture)),
         'PyTorch required: False',
+        'initial query source: {}'.format(
+            'fixture' if args.initial_query_from_fixture else 'frontend'),
     ]
     cuda = None
     stream = None
@@ -213,6 +219,22 @@ def main():
                 CUDA_MEMCPY_HOST_TO_DEVICE, stream),
                 'decoder-only input H2D')
 
+        initial_query_pointers = {}
+        if args.initial_query_from_fixture:
+            for name in STATE_INPUTS:
+                if name not in fixture:
+                    raise KeyError(
+                        'fixture is missing initial query {}'.format(name))
+                dtype = numpy_dtype(
+                    trt, decoder_engine.get_tensor_dtype(name))
+                array = np.ascontiguousarray(fixture[name], dtype=dtype)
+                pointer = allocate(array.nbytes)
+                initial_query_pointers[name] = pointer
+                cuda.check(cuda.lib.cudaMemcpyAsync(
+                    pointer, ctypes.c_void_p(array.ctypes.data), array.nbytes,
+                    CUDA_MEMCPY_HOST_TO_DEVICE, stream),
+                    'initial query H2D')
+
         for name in decoder_names:
             if decoder_engine.get_tensor_mode(name) != \
                     trt.TensorIOMode.INPUT:
@@ -280,8 +302,12 @@ def main():
         def execute_pipeline():
             if not frontend_context.execute_async_v3(stream.value):
                 raise RuntimeError('frontend TensorRT execution failed')
-            bbox_input = frontend_output_pointers['query_bbox']
-            feature_input = frontend_output_pointers['query_feat']
+            if args.initial_query_from_fixture:
+                bbox_input = initial_query_pointers['query_bbox']
+                feature_input = initial_query_pointers['query_feat']
+            else:
+                bbox_input = frontend_output_pointers['query_bbox']
+                feature_input = frontend_output_pointers['query_feat']
             for index in range(iterations):
                 feature_output = feature_buffers[index % 2]
                 decoder_context.set_tensor_address(
