@@ -18,7 +18,7 @@ from deploy.export_onnx import (
     enable_standard_onnx_fallbacks,
     install_export_symbolics,
 )
-from deploy.onnx_wrapper import INPUT_NAMES, RaCFormerONNXWrapper
+from deploy.onnx_wrapper import RaCFormerONNXWrapper, get_input_names
 from deploy.pytorch_runner import RaCFormerPyTorchRunner
 
 
@@ -156,15 +156,19 @@ def main():
         runner = RaCFormerPyTorchRunner(
             args.config, args.weights, device=args.device)
         disable_gradient_checkpointing(runner.model)
+        num_frames = int(
+            runner.model.pts_bbox_head.transformer.decoder.decoder_layer
+            .sampling.num_frames)
+        input_names = get_input_names(num_frames)
         fixture_data = np.load(args.model_fixture)
-        missing = [name for name in INPUT_NAMES if name not in fixture_data]
+        missing = [name for name in input_names if name not in fixture_data]
         if missing:
             raise KeyError('model fixture is missing inputs: {}'.format(
                 missing))
         model_inputs = tuple(
             torch.from_numpy(np.ascontiguousarray(fixture_data[name])).to(
                 runner.device)
-            for name in INPUT_NAMES)
+            for name in input_names)
 
         enable_standard_onnx_fallbacks(
             runner.model, mixing_chunk_size=32768,

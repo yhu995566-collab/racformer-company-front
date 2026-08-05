@@ -49,13 +49,14 @@ def main():
     lines = [
         '=== Radar scatter equivalence check ===',
         'sample index: {}'.format(args.sample_index),
+        'temporal frames: {}'.format(preprocessor.num_frames),
         'shape: channels={}, height={}, width={}'.format(
             channels, height, width),
         'atol: {}'.format(args.atol),
     ]
     passed = True
     with torch.no_grad():
-        for frame_index in range(8):
+        for frame_index in range(preprocessor.num_frames):
             offset = 8 + frame_index * 3
             voxels, num_points, coors = inputs[offset:offset + 3]
             features = model.radar_voxel_encoder(

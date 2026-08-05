@@ -33,22 +33,24 @@ four-frame runtime contract.
 
 ## Determine Static Radar Capacity
 
-TensorRT 8.5 requires the proven static radar padding path. Reuse the per-frame
-capacity from the successful eight-frame export; do not infer it from engine
-size or choose a smaller value without auditing voxel counts.
+TensorRT 8.5 requires the proven static radar padding path. The successful
+eight-frame deployment used **1024 voxel slots per frame**. This is a per-frame
+capacity, so the four-frame graph contains 4096 padded slots in total rather
+than the old graph's 8192.
 
 ```bash
 grep -R -h 'static radar voxel slots:' outputs/deploy_onnx \
   --include='*.txt' | sort -u
 ```
 
-Set the reported non-empty value:
+Use the same validated per-frame capacity for initial four-frame bring-up:
 
 ```bash
-STATIC_RADAR_VOXELS=<validated_capacity>
+STATIC_RADAR_VOXELS=1024
 ```
 
-This is the only historical export parameter not recorded in the repository.
+Do not reduce this value from the sample-0 count alone. Audit voxel counts over
+the intended deployment dataset before choosing a smaller production capacity.
 
 ## 1. Export Four-Frame Model Fixture
 
@@ -129,13 +131,18 @@ Parse both graphs:
 python -m deploy.tensorrt.parse_onnx \
   --onnx "$ONNX/racformer_f4_frontend_precompute_v2_trt85.onnx" \
   --plugin "$PLUGIN" \
+  --fail-on-zero-dim \
   --out "$TRT/parse_f4_frontend_precompute_v2_trt852.txt"
 
 python -m deploy.tensorrt.parse_onnx \
   --onnx "$ONNX/racformer_f4_decoder_precompute_v2_trt85.onnx" \
   --plugin "$PLUGIN" \
+  --fail-on-zero-dim \
   --out "$TRT/parse_f4_decoder_precompute_v2_trt852.txt"
 ```
+
+Both reports must show `status: PASS`, `parser errors: 0`, and
+`zero-dimension execution tensors: 0` before building either engine.
 
 Build the frontend with FP16 tactics and the decoder in strict FP32:
 

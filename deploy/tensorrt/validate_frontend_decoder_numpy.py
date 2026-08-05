@@ -50,6 +50,12 @@ def parse_args():
         '--initial-query-from-fixture', action='store_true',
         help='Keep the learned initial query state in FP32 outside the '
              'frontend engine')
+    parser.add_argument(
+        '--frontend-output-from-fixture', action='append', default=[],
+        metavar='NAME',
+        help='Feed this frontend output to the decoder from the FP32 fixture '
+             'instead of the frontend engine; may be repeated for branch '
+             'isolation experiments')
     parser.add_argument('--save-outputs')
     return parser.parse_args()
 
@@ -88,6 +94,8 @@ def main():
         'PyTorch required: False',
         'initial query source: {}'.format(
             'fixture' if args.initial_query_from_fixture else 'frontend'),
+        'fixture frontend outputs: {}'.format(
+            args.frontend_output_from_fixture),
     ]
     cuda = None
     stream = None
@@ -202,6 +210,21 @@ def main():
                 'decoder engine is missing tensors: {}'.format(
                     sorted(missing)))
 
+        fixture_frontend_outputs = set(args.frontend_output_from_fixture)
+        unknown_fixture_outputs = fixture_frontend_outputs.difference(
+            frontend_output_shapes)
+        if unknown_fixture_outputs:
+            raise ValueError(
+                'requested fixture frontend outputs are not produced by the '
+                'frontend engine: {}'.format(
+                    sorted(unknown_fixture_outputs)))
+        unused_fixture_outputs = fixture_frontend_outputs.difference(
+            decoder_names)
+        if unused_fixture_outputs:
+            raise ValueError(
+                'requested fixture frontend outputs are not consumed by the '
+                'decoder engine: {}'.format(sorted(unused_fixture_outputs)))
+
         decoder_direct_inputs = {}
         for name in decoder_names:
             if decoder_engine.get_tensor_mode(name) != \
@@ -239,6 +262,26 @@ def main():
                 CUDA_MEMCPY_HOST_TO_DEVICE, stream),
                 'decoder-only input H2D')
 
+        fixture_frontend_pointers = {}
+        for name in sorted(fixture_frontend_outputs):
+            if name not in fixture:
+                raise KeyError(
+                    'fixture is missing frontend output {}'.format(name))
+            dtype = numpy_dtype(
+                trt, decoder_engine.get_tensor_dtype(name))
+            array = np.ascontiguousarray(fixture[name], dtype=dtype)
+            expected_shape = tuple(decoder_context.get_tensor_shape(name))
+            if tuple(array.shape) != expected_shape:
+                raise ValueError(
+                    'fixture frontend output {} has shape {}, expected {}'
+                    .format(name, array.shape, expected_shape))
+            pointer = allocate(array.nbytes)
+            fixture_frontend_pointers[name] = pointer
+            cuda.check(cuda.lib.cudaMemcpyAsync(
+                pointer, ctypes.c_void_p(array.ctypes.data), array.nbytes,
+                CUDA_MEMCPY_HOST_TO_DEVICE, stream),
+                'fixture frontend output H2D')
+
         initial_query_pointers = {}
         if args.initial_query_from_fixture:
             for name in STATE_INPUTS:
@@ -261,7 +304,9 @@ def main():
                 continue
             if name in STATE_INPUTS or name == 'd_region':
                 continue
-            if name in frontend_output_pointers:
+            if name in fixture_frontend_pointers:
+                pointer = fixture_frontend_pointers[name]
+            elif name in frontend_output_pointers:
                 pointer = frontend_output_pointers[name]
             elif name in frontend_input_pointers:
                 pointer = frontend_input_pointers[name]

@@ -18,7 +18,7 @@ from deploy.export_onnx import (
     enable_standard_onnx_fallbacks,
     install_export_symbolics,
 )
-from deploy.onnx_wrapper import INPUT_NAMES, RaCFormerONNXWrapper
+from deploy.onnx_wrapper import RaCFormerONNXWrapper, get_input_names
 from deploy.pytorch_runner import RaCFormerPyTorchRunner
 
 
@@ -61,6 +61,7 @@ class DecoderLayerProbe(nn.Module):
         self.decoder_layer = copy.deepcopy(decoder_layer)
         self.image_height = int(image_height)
         self.image_width = int(image_width)
+        self.num_frames = int(self.decoder_layer.sampling.num_frames)
 
     def forward(
             self, query_bbox, query_feat,
@@ -70,7 +71,7 @@ class DecoderLayerProbe(nn.Module):
         image_shape = (
             self.image_height, self.image_width, 3)
         img_metas = [dict(
-            img_shape=[image_shape] * 8,
+            img_shape=[image_shape] * self.num_frames,
             lidar2img=lidar2img,
             time_diff=time_diff,
             velocity_time_diff=velocity_time_diff)]
@@ -121,15 +122,19 @@ def main():
         runner = RaCFormerPyTorchRunner(
             args.config, args.weights, device=args.device)
         disable_gradient_checkpointing(runner.model)
+        num_frames = int(
+            runner.model.pts_bbox_head.transformer.decoder.decoder_layer
+            .sampling.num_frames)
+        input_names = get_input_names(num_frames)
         fixture_data = np.load(args.model_fixture)
-        missing = [name for name in INPUT_NAMES if name not in fixture_data]
+        missing = [name for name in input_names if name not in fixture_data]
         if missing:
             raise KeyError('model fixture is missing inputs: {}'.format(
                 missing))
         model_inputs = tuple(
             torch.from_numpy(np.ascontiguousarray(fixture_data[name])).to(
                 runner.device)
-            for name in INPUT_NAMES)
+            for name in input_names)
 
         enable_standard_onnx_fallbacks(
             runner.model, mixing_chunk_size=32768,
