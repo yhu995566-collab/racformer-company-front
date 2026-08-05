@@ -34,8 +34,18 @@ def parse_args():
     parser.add_argument('--plugin', action='append', default=[])
     parser.add_argument('--warmup', type=int, default=2)
     parser.add_argument('--iters', type=int, default=10)
+    parser.add_argument(
+        '--decoder-iterations', type=int,
+        help='Run only the first N recurrent decoder iterations. The result '
+             'is still compared with the original final decoder detections '
+             'for deployment early-exit experiments')
     parser.add_argument('--atol', type=float, default=6e-3)
     parser.add_argument('--accept-decoded-match', action='store_true')
+    parser.add_argument(
+        '--profile-stages', action='store_true',
+        help='Record frontend and per-decoder-iteration CUDA timings. '
+             'This adds CUDA event overhead and is intended for profiling, '
+             'not production benchmarking')
     parser.add_argument(
         '--initial-query-from-fixture', action='store_true',
         help='Keep the learned initial query state in FP32 outside the '
@@ -102,18 +112,28 @@ def main():
             decoder_engine = runtime.deserialize_cuda_engine(file.read())
         if frontend_engine is None or decoder_engine is None:
             raise RuntimeError('failed to deserialize TensorRT engines')
+        free_after_engines, _ = cuda.memory_info()
         frontend_context = frontend_engine.create_execution_context()
         decoder_context = decoder_engine.create_execution_context()
         if frontend_context is None or decoder_context is None:
             raise RuntimeError('failed to create TensorRT contexts')
+        free_after_contexts, _ = cuda.memory_info()
 
         fixture = np.load(args.fixture)
         d_regions = np.ascontiguousarray(
             fixture['decoder_d_regions'], dtype=np.float32)
         pc_range = np.asarray(fixture['decoder_pc_range'], dtype=np.float32)
-        iterations = int(d_regions.size)
-        if iterations <= 0:
+        available_iterations = int(d_regions.size)
+        if available_iterations <= 0:
             raise RuntimeError('decoder_d_regions is empty')
+        iterations = (
+            available_iterations if args.decoder_iterations is None
+            else args.decoder_iterations)
+        if not 1 <= iterations <= available_iterations:
+            raise ValueError(
+                'decoder-iterations must be between 1 and {}, got {}'.format(
+                    available_iterations, iterations))
+        d_regions = d_regions[:iterations]
         stream = cuda.create_stream()
 
         def allocate(size):
@@ -298,10 +318,19 @@ def main():
         ]
         cuda.check(
             cuda.lib.cudaStreamSynchronize(stream), 'input synchronization')
+        free_after_buffers, _ = cuda.memory_info()
 
-        def execute_pipeline():
+        def execute_pipeline(stage_events=None):
+            if stage_events is not None:
+                cuda.check(
+                    cuda.lib.cudaEventRecord(stage_events[0], stream),
+                    'frontend start event record')
             if not frontend_context.execute_async_v3(stream.value):
                 raise RuntimeError('frontend TensorRT execution failed')
+            if stage_events is not None:
+                cuda.check(
+                    cuda.lib.cudaEventRecord(stage_events[1], stream),
+                    'frontend end event record')
             if args.initial_query_from_fixture:
                 bbox_input = initial_query_pointers['query_bbox']
                 feature_input = initial_query_pointers['query_feat']
@@ -326,6 +355,11 @@ def main():
                     raise RuntimeError(
                         'decoder execution failed at iteration {}'.format(
                             index))
+                if stage_events is not None:
+                    cuda.check(
+                        cuda.lib.cudaEventRecord(
+                            stage_events[index + 2], stream),
+                        'decoder {} end event record'.format(index))
                 bbox_input = bbox_buffers[index]
                 feature_input = feature_output
 
@@ -333,14 +367,23 @@ def main():
             execute_pipeline()
         cuda.check(
             cuda.lib.cudaStreamSynchronize(stream), 'warmup synchronization')
+        free_after_warmup, _ = cuda.memory_info()
 
         latencies = []
+        frontend_latencies = []
+        decoder_layer_latencies = [[] for _ in range(iterations)]
+        stage_events = None
+        if args.profile_stages:
+            stage_events = [
+                cuda.create_event() for _ in range(iterations + 2)
+            ]
+            events.extend(stage_events)
         for _ in range(args.iters):
             start = cuda.create_event()
             end = cuda.create_event()
             events.extend([start, end])
             cuda.check(cuda.lib.cudaEventRecord(start, stream), 'event record')
-            execute_pipeline()
+            execute_pipeline(stage_events)
             cuda.check(cuda.lib.cudaEventRecord(end, stream), 'event record')
             cuda.check(
                 cuda.lib.cudaEventSynchronize(end), 'event synchronization')
@@ -348,6 +391,18 @@ def main():
             cuda.check(cuda.lib.cudaEventElapsedTime(
                 ctypes.byref(elapsed), start, end), 'event elapsed time')
             latencies.append(elapsed.value)
+            if stage_events is not None:
+                elapsed = ctypes.c_float()
+                cuda.check(cuda.lib.cudaEventElapsedTime(
+                    ctypes.byref(elapsed), stage_events[0],
+                    stage_events[1]), 'frontend event elapsed time')
+                frontend_latencies.append(elapsed.value)
+                for index in range(iterations):
+                    cuda.check(cuda.lib.cudaEventElapsedTime(
+                        ctypes.byref(elapsed), stage_events[index + 1],
+                        stage_events[index + 2]),
+                        'decoder {} event elapsed time'.format(index))
+                    decoder_layer_latencies[index].append(elapsed.value)
             cuda.check(cuda.lib.cudaEventDestroy(start), 'cudaEventDestroy')
             cuda.check(cuda.lib.cudaEventDestroy(end), 'cudaEventDestroy')
             events = events[:-2]
@@ -382,12 +437,16 @@ def main():
         raw_passed = True
         lines.extend([
             'decoder iterations: {}'.format(iterations),
+            'available decoder iterations: {}'.format(
+                available_iterations),
+            'decoder early exit: {}'.format(
+                iterations < available_iterations),
             'd_region schedule: {}'.format(d_regions.tolist()),
             '',
             '=== Numerical comparison ===',
         ])
         for name, actual in actual_outputs.items():
-            reference = fixture[name]
+            reference = fixture[name][:iterations]
             difference = np.abs(
                 actual.astype(np.float64) - reference.astype(np.float64))
             close = np.allclose(
@@ -404,6 +463,8 @@ def main():
         actual_decoded = decode_detections(
             actual_outputs['all_cls_scores'],
             actual_outputs['all_bbox_preds'])
+        # Compare early exit with the established final six-layer result,
+        # rather than with the same intermediate fixture layer.
         reference_decoded = decode_detections(
             fixture['all_cls_scores'], fixture['all_bbox_preds'])
         actual_boxes, actual_scores, actual_labels = actual_decoded
@@ -436,17 +497,49 @@ def main():
             'end-to-end engine GPU latency: {}'.format(stats(latencies)),
             'resident CUDA memory delta: {:.2f} MB'.format(
                 max(0, free_before - free_after) / (1024 ** 2)),
+            'engine deserialization memory delta: {:.2f} MB'.format(
+                max(0, free_before - free_after_engines) / (1024 ** 2)),
+            'execution context memory delta: {:.2f} MB'.format(
+                max(0, free_after_engines - free_after_contexts) /
+                (1024 ** 2)),
+            'runtime buffer memory delta: {:.2f} MB'.format(
+                max(0, free_after_contexts - free_after_buffers) /
+                (1024 ** 2)),
+            'warmup lazy-allocation memory delta: {:.2f} MB'.format(
+                max(0, free_after_buffers - free_after_warmup) /
+                (1024 ** 2)),
             'device memory total: {:.2f} MB'.format(
                 total_memory / (1024 ** 2)),
         ])
+        if args.profile_stages:
+            decoder_totals = np.sum(
+                np.asarray(decoder_layer_latencies, dtype=np.float64),
+                axis=0)
+            lines.extend([
+                'stage profiling: enabled (CUDA event overhead included)',
+                'frontend GPU latency: {}'.format(
+                    stats(frontend_latencies)),
+                'recurrent decoder GPU latency: {}'.format(
+                    stats(decoder_totals)),
+            ])
+            lines.extend(
+                'decoder iteration {} GPU latency: {}'.format(
+                    index, stats(values))
+                for index, values in enumerate(decoder_layer_latencies))
         if args.save_outputs:
             output_path = os.path.abspath(args.save_outputs)
             os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
             np.savez_compressed(output_path, **actual_outputs)
             lines.append('actual outputs: {}'.format(output_path))
 
-        accepted = raw_passed or (
-            args.accept_decoded_match and decoded_passed)
+        if iterations < available_iterations:
+            # Raw parity only proves that TensorRT reproduced the selected
+            # intermediate layer. Deployment acceptance must still be based
+            # on its decoded agreement with the full decoder result.
+            accepted = args.accept_decoded_match and decoded_passed
+        else:
+            accepted = raw_passed or (
+                args.accept_decoded_match and decoded_passed)
         lines.extend([
             '',
             '=== Acceptance ===',
