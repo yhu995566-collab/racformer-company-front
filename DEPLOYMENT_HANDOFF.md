@@ -379,3 +379,21 @@ The validator now also accepts `--decoder-iterations N`. This runs the first N
 entries of the six-element `d_region` schedule while comparing decoded output
 against the established final six-layer fixture result. Raw parity for an
 intermediate layer cannot by itself accept an early-exit deployment.
+
+### Decoder early-exit result
+
+The five-iteration experiment failed decisively in the L20 TensorRT 8.5.2
+container:
+
+- decoded detections: `4/8`;
+- boxes close: `False`;
+- scores close: `False`;
+- labels equal: `False`;
+- decoded comparison: `False`;
+- end-to-end engine latency: about `90.683 ms`.
+
+The sixth decoder iteration is required by the current checkpoint. Do not test
+four or three iterations: once five iterations lose half of the detections,
+shorter schedules cannot answer a useful deployment question. Keep all six
+FP32 recurrent decoder iterations unless the model is retrained explicitly for
+early exits.
