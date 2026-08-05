@@ -318,7 +318,7 @@ than further TensorRT 8.5 layer-pattern experiments.
 ## 12. Repository State
 
 - Branch: `main`
-- Latest relevant commit: `e759d61`
+- Latest relevant committed training change: `6d28b4f`
 - `scripts/` is currently untracked and unrelated to this handoff. Do not add,
   delete, or revert it unless its owner explicitly requests that action.
 - Large ONNX, fixture, engine, and report files are deployment artifacts and are
@@ -397,3 +397,22 @@ four or three iterations: once five iterations lose half of the detections,
 shorter schedules cannot answer a useful deployment question. Keep all six
 FP32 recurrent decoder iterations unless the model is retrained explicitly for
 early exits.
+
+## 15. Four-Frame Deployment
+
+The trained four-frame checkpoint is:
+
+`outputs/racformer_company_front_velocity_v2_f4/2026-08-05/11-17-49/epoch_36.pth`.
+
+Deployment proceeds without another training/evaluation gate at the owner's
+direction. Use
+`configs/deploy/racformer_company_front_left_pytorch_f4.py`. Production ONNX
+exporters now derive the temporal input list and shapes from the selected
+checkpoint/config, while the legacy eight-frame diagnostic input symbol is
+retained for compatibility.
+
+The complete native-PyTorch export, TensorRT 8.5 container build, and split
+pipeline validation commands are in `deploy/FOUR_FRAME_TENSORRT.md`. Before
+export, recover the successful eight-frame `static radar voxel slots` value
+from the existing export reports; that historical capacity is not recorded in
+the repository and must not be guessed.

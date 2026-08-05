@@ -27,7 +27,7 @@ class FrameInput:
 
 @dataclass
 class PreparedBatch:
-    """Batch-size-one, eight-frame inputs before or after GPU transfer."""
+    """Batch-size-one temporal inputs before or after GPU transfer."""
 
     image: torch.Tensor
     radar_points: List[torch.Tensor]

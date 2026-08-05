@@ -29,7 +29,7 @@ from deploy.export_onnx import (
     enable_standard_onnx_fallbacks,
     install_export_symbolics,
 )
-from deploy.onnx_wrapper import INPUT_NAMES, RaCFormerONNXWrapper
+from deploy.onnx_wrapper import RaCFormerONNXWrapper, get_input_names
 from deploy.pytorch_runner import RaCFormerPyTorchRunner
 from models.bbox.utils import theta_d2xy_coods
 
@@ -55,7 +55,10 @@ def parse_args():
     parser.add_argument('--opset', type=int, default=17)
     parser.add_argument('--precompute-bev-values', action='store_true')
     parser.add_argument('--out', required=True)
-    parser.add_argument('--fixture', required=True)
+    parser.add_argument(
+        '--fixture',
+        help='Optional decoder-only diagnostic fixture. The chained runtime '
+             'uses the frontend fixture instead')
     parser.add_argument('--report', required=True)
     return parser.parse_args()
 
@@ -71,6 +74,7 @@ class RecurrentDecoderLayer(nn.Module):
             enable_precomputed_bev_values(self.decoder_layer)
         self.image_height = int(image_height)
         self.image_width = int(image_width)
+        self.num_frames = int(self.decoder_layer.sampling.num_frames)
 
     def forward(
             self, query_bbox, query_feat,
@@ -79,7 +83,7 @@ class RecurrentDecoderLayer(nn.Module):
             lidar2img, time_diff, velocity_time_diff, d_region):
         image_shape = (self.image_height, self.image_width, 3)
         img_metas = [dict(
-            img_shape=[image_shape] * 8,
+            img_shape=[image_shape] * self.num_frames,
             lidar2img=lidar2img,
             time_diff=time_diff,
             velocity_time_diff=velocity_time_diff)]
@@ -145,15 +149,19 @@ def main():
         runner = RaCFormerPyTorchRunner(
             args.config, args.weights, device=args.device)
         disable_gradient_checkpointing(runner.model)
+        num_frames = int(
+            runner.model.pts_bbox_head.transformer.decoder.decoder_layer
+            .sampling.num_frames)
+        input_names = get_input_names(num_frames)
         fixture_data = np.load(args.model_fixture)
-        missing = [name for name in INPUT_NAMES if name not in fixture_data]
+        missing = [name for name in input_names if name not in fixture_data]
         if missing:
             raise KeyError('model fixture is missing inputs: {}'.format(
                 missing))
         model_inputs = tuple(
             torch.from_numpy(np.ascontiguousarray(fixture_data[name])).to(
                 runner.device)
-            for name in INPUT_NAMES)
+            for name in input_names)
 
         enable_standard_onnx_fallbacks(
             runner.model, mixing_chunk_size=32768,
@@ -290,21 +298,23 @@ def main():
             for name, tensor in zip(
                 RECURRENT_OUTPUT_NAMES, recurrent_outputs))
 
-        fixture_path = os.path.abspath(args.fixture)
-        os.makedirs(os.path.dirname(fixture_path) or '.', exist_ok=True)
-        arrays = {
-            name: tensor.detach().cpu().numpy()
-            for name, tensor in zip(shared_input_names, shared_inputs)
-        }
-        arrays['decoder_d_regions'] = d_regions.detach().cpu().numpy()
-        arrays['decoder_pc_range'] = np.asarray(
-            decoder.pc_range, dtype=np.float32)
-        arrays.update({
-            name: tensor.detach().cpu().numpy()
-            for name, tensor in zip(
-                DETECTION_OUTPUT_NAMES, reference_outputs)
-        })
-        np.savez_compressed(fixture_path, **arrays)
+        fixture_path = None
+        if args.fixture:
+            fixture_path = os.path.abspath(args.fixture)
+            os.makedirs(os.path.dirname(fixture_path) or '.', exist_ok=True)
+            arrays = {
+                name: tensor.detach().cpu().numpy()
+                for name, tensor in zip(shared_input_names, shared_inputs)
+            }
+            arrays['decoder_d_regions'] = d_regions.detach().cpu().numpy()
+            arrays['decoder_pc_range'] = np.asarray(
+                decoder.pc_range, dtype=np.float32)
+            arrays.update({
+                name: tensor.detach().cpu().numpy()
+                for name, tensor in zip(
+                    DETECTION_OUTPUT_NAMES, reference_outputs)
+            })
+            np.savez_compressed(fixture_path, **arrays)
 
         output_path = os.path.abspath(args.out)
         os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
@@ -326,7 +336,8 @@ def main():
             raise RuntimeError('d_region was folded out of the ONNX graph')
         lines.extend([
             '',
-            'fixture: {}'.format(fixture_path),
+            'decoder-only fixture: {}'.format(
+                fixture_path if fixture_path is not None else 'not saved'),
             'onnx: {}'.format(output_path),
             'd_region ONNX input: True',
             'onnx checker: PASS',

@@ -38,9 +38,9 @@ The minimal FP32 TensorRT 8.6 implementation and build instructions live in
 After parser validation, export a fixture with `deploy.export_onnx --fixture`,
 build the first FP32 engine with `deploy.tensorrt.build_engine`, and compare its
 raw outputs with `deploy.tensorrt.validate_engine`. The engine builder applies
-one shared voxel-count profile to all 24 dynamic radar tensors. Start with a
-bounded profile that covers measured data; do not use the model's theoretical
-40,000-voxel cap without checking target memory and build time.
+one shared voxel-count profile to every frame's three dynamic radar tensors.
+Start with a bounded profile that covers measured data; do not use the model's
+theoretical 40,000-voxel cap without checking target memory and build time.
 
 If an x86 TensorRT installation was linked against a different cuDNN version
 than the only library available in the PyTorch environment,

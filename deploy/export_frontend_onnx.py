@@ -28,7 +28,7 @@ from deploy.export_onnx import (
     enable_standard_onnx_fallbacks,
     install_export_symbolics,
 )
-from deploy.onnx_wrapper import INPUT_NAMES
+from deploy.onnx_wrapper import get_input_names
 from deploy.pytorch_runner import RaCFormerPyTorchRunner
 from deploy.tensorrt.rewrite_trt85_onnx import (
     rewrite_trt85_unsupported_nodes,
@@ -67,6 +67,7 @@ class RaCFormerFrontendONNXWrapper(nn.Module):
         decoder = model.pts_bbox_head.transformer.decoder
         self.num_cams = int(decoder.num_cams)
         self.decoder_layer = decoder.decoder_layer
+        self.num_frames = int(self.decoder_layer.sampling.num_frames)
         self.precompute_values = bool(precompute_values)
 
     def forward(
@@ -75,21 +76,23 @@ class RaCFormerFrontendONNXWrapper(nn.Module):
             *radar_voxel_inputs):
         image_shape = (self.image_height, self.image_width, 3)
         img_meta = dict(
-            img_shape=[image_shape] * 8,
-            ori_shape=[image_shape] * 8,
-            pad_shape=[image_shape] * 8,
+            img_shape=[image_shape] * self.num_frames,
+            ori_shape=[image_shape] * self.num_frames,
+            pad_shape=[image_shape] * self.num_frames,
             lidar2img=lidar2img[0],
             decoder_lidar2img=lidar2img,
             img2lidar=img2lidar[0],
             mlp_input=mlp_input,
             time_diff=time_diff,
             velocity_time_diff=velocity_time_diff)
-        if len(radar_voxel_inputs) != 24:
+        expected_radar_inputs = self.num_frames * 3
+        if len(radar_voxel_inputs) != expected_radar_inputs:
             raise ValueError(
-                'expected voxels, num_points, and coors for 8 frames')
+                'expected voxels, num_points, and coors for {} frames'.format(
+                    self.num_frames))
         radar_points = [
             tuple(radar_voxel_inputs[index:index + 3])
-            for index in range(0, 24, 3)
+            for index in range(0, expected_radar_inputs, 3)
         ]
         image_feats, lss_bev_feats, radar_bev_feats, _ = \
             self.model.extract_feat(
@@ -171,15 +174,19 @@ def main():
         runner = RaCFormerPyTorchRunner(
             args.config, args.weights, device=args.device)
         disable_gradient_checkpointing(runner.model)
+        num_frames = int(
+            runner.model.pts_bbox_head.transformer.decoder.decoder_layer
+            .sampling.num_frames)
+        input_names = get_input_names(num_frames)
         fixture_data = np.load(args.model_fixture)
-        missing = [name for name in INPUT_NAMES if name not in fixture_data]
+        missing = [name for name in input_names if name not in fixture_data]
         if missing:
             raise KeyError('model fixture is missing inputs: {}'.format(
                 missing))
         model_inputs = tuple(
             torch.from_numpy(np.ascontiguousarray(fixture_data[name])).to(
                 runner.device)
-            for name in INPUT_NAMES)
+            for name in input_names)
 
         enable_standard_onnx_fallbacks(
             runner.model, mixing_chunk_size=32768,
@@ -226,7 +233,7 @@ def main():
         ])
         lines.extend(
             describe(name, tensor)
-            for name, tensor in zip(INPUT_NAMES, model_inputs))
+            for name, tensor in zip(input_names, model_inputs))
         lines.extend(
             describe(name, tensor)
             for name, tensor in zip(
@@ -236,7 +243,7 @@ def main():
         os.makedirs(os.path.dirname(fixture_path) or '.', exist_ok=True)
         arrays = {
             name: tensor.detach().cpu().numpy()
-            for name, tensor in zip(INPUT_NAMES, model_inputs)
+            for name, tensor in zip(input_names, model_inputs)
         }
         arrays.update({
             name: tensor.detach().cpu().numpy()
@@ -262,7 +269,7 @@ def main():
             export_params=True,
             opset_version=args.opset,
             do_constant_folding=False,
-            input_names=INPUT_NAMES,
+            input_names=input_names,
             output_names=frontend_output_names,
             verbose=False)
         rewrite_result = rewrite_trt85_unsupported_nodes(

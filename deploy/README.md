@@ -4,6 +4,11 @@ This directory contains the deployment-only path for the existing
 `racformer_company_front_velocity_v2` checkpoint. It keeps the trained model
 unchanged and replaces the validation dataset pipeline with runtime inputs.
 
+The four-frame checkpoint TensorRT bring-up procedure is documented in
+[`FOUR_FRAME_TENSORRT.md`](FOUR_FRAME_TENSORRT.md). The production exporters
+derive temporal input names and shapes from the selected config, so the proven
+eight-frame path remains supported.
+
 ## Current Contract
 
 - Use only the left image from the stereo camera.

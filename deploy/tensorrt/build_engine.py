@@ -236,15 +236,18 @@ def main():
             dynamic_inputs += 1
             lines.append('{}: {} / {} / {}'.format(
                 tensor.name, min_shape, opt_shape, max_shape))
-        if dynamic_inputs not in (0, 24):
+        if dynamic_inputs and dynamic_inputs % 3:
             raise RuntimeError(
-                'expected zero or 24 dynamic radar inputs, found {}'.format(
+                'expected zero or a multiple of three dynamic radar inputs, '
+                'found {}'.format(
                     dynamic_inputs))
         if dynamic_inputs:
             if not profile:
                 raise RuntimeError(
                     'TensorRT rejected the optimization profile')
             config.add_optimization_profile(profile)
+            lines.append('dynamic radar frames: {}'.format(
+                dynamic_inputs // 3))
         else:
             lines.append('all TensorRT inputs are static; no profile required')
 

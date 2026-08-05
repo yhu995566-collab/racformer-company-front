@@ -21,7 +21,8 @@ from mmdet3d.datasets import build_dataset
 
 from deploy.offline_demo import load_frames
 from deploy.onnx_wrapper import (
-    INPUT_NAMES, OUTPUT_NAMES, RaCFormerONNXWrapper, build_export_inputs)
+    OUTPUT_NAMES, RaCFormerONNXWrapper, build_export_inputs,
+    get_input_names)
 from deploy.preprocessing import DeploymentPreprocessor
 from deploy.pytorch_runner import RaCFormerPyTorchRunner
 from models.csrc.tensorrt_barrier import tensorrt_fusion_barrier
@@ -65,7 +66,7 @@ def parse_args():
         help='Decompose IsInf and LayerNormalization for TensorRT 8.5')
     parser.add_argument(
         '--radar-frame-barriers', action='store_true',
-        help='Keep the eight dynamic radar voxel branches in separate '
+        help='Keep dynamic radar voxel branches in separate '
              'TensorRT fusion regions')
     parser.add_argument(
         '--static-radar-voxels', type=int,
@@ -101,11 +102,11 @@ def write_report(path, lines):
     print('Export report: {}'.format(path))
 
 
-def save_fixture(path, inputs, outputs, output_names):
+def save_fixture(path, inputs, outputs, input_names, output_names):
     path = os.path.abspath(path)
     mmcv.mkdir_or_exist(os.path.dirname(path))
     arrays = {}
-    for name, tensor in zip(INPUT_NAMES, inputs):
+    for name, tensor in zip(input_names, inputs):
         arrays[name] = tensor.detach().cpu().numpy()
     for name, tensor in zip(output_names, outputs):
         arrays[name] = tensor.detach().cpu().numpy()
@@ -114,10 +115,16 @@ def save_fixture(path, inputs, outputs, output_names):
 
 
 def pad_radar_inputs(inputs, target_voxels, radar_output_shape):
-    """Pad the eight radar input triples to a fixed first dimension."""
+    """Pad every radar input triple to a fixed first dimension."""
     height, width = (int(value) for value in radar_output_shape)
     padded = list(inputs[:8])
-    for frame_index in range(8):
+    radar_tensor_count = len(inputs) - 8
+    if radar_tensor_count <= 0 or radar_tensor_count % 3:
+        raise ValueError(
+            'expected one or more radar input triples, got {} tensors'.format(
+                radar_tensor_count))
+    num_frames = radar_tensor_count // 3
+    for frame_index in range(num_frames):
         offset = 8 + frame_index * 3
         voxels, num_points, coors = inputs[offset:offset + 3]
         count = int(voxels.shape[0])
@@ -464,6 +471,7 @@ def main():
             raise IndexError('sample index is outside the dataset')
 
         preprocessor = DeploymentPreprocessor(cfg)
+        input_names = get_input_names(preprocessor.num_frames)
         frames = load_frames(dataset, args.sample_index, preprocessor.num_frames)
         cpu_batch = preprocessor.prepare(frames)
         runner = RaCFormerPyTorchRunner(
@@ -493,7 +501,7 @@ def main():
         report.extend(['', '=== Inputs ==='])
         report.extend(
             describe_tensor(name, tensor)
-            for name, tensor in zip(INPUT_NAMES, inputs))
+            for name, tensor in zip(input_names, inputs))
 
         with torch.no_grad():
             legacy_outputs = legacy_raw_outputs(runner.model, batch)
@@ -517,7 +525,7 @@ def main():
                     runner.model, inputs[4])
             static_radar_comparisons = []
             if args.static_radar_voxels is not None:
-                for frame_index in range(8):
+                for frame_index in range(preprocessor.num_frames):
                     offset = 8 + frame_index * 3
                     runner.model._deploy_trt_static_radar_padding = False
                     unpadded_bev = runner.model.extract_pts_feat(
@@ -647,11 +655,11 @@ def main():
 
         if args.fixture:
             fixture_path = save_fixture(
-                args.fixture, inputs, outputs, output_names)
+                args.fixture, inputs, outputs, input_names, output_names)
             report.extend([
                 '', '=== TensorRT fixture ===',
                 'fixture: {}'.format(fixture_path),
-                'arrays: {}'.format(len(INPUT_NAMES) + len(output_names)),
+                'arrays: {}'.format(len(input_names) + len(output_names)),
             ])
 
         output_path = os.path.abspath(args.out)
@@ -660,7 +668,7 @@ def main():
             if args.fallthrough else torch.onnx.OperatorExportTypes.ONNX
         dynamic_axes = {}
         if args.static_radar_voxels is None:
-            for index in range(8):
+            for index in range(preprocessor.num_frames):
                 voxel_count = 'radar_voxel_{}_count'.format(index)
                 dynamic_axes.update({
                     'radar_voxels_{}'.format(index): {0: voxel_count},
@@ -675,7 +683,7 @@ def main():
             export_params=True,
             opset_version=args.opset,
             do_constant_folding=args.constant_folding,
-            input_names=INPUT_NAMES,
+            input_names=input_names,
             output_names=output_names,
             dynamic_axes=dynamic_axes,
             operator_export_type=operator_type,

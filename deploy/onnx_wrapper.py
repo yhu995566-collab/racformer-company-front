@@ -6,7 +6,7 @@ from torch import nn
 
 
 class RaCFormerONNXWrapper(nn.Module):
-    """Expose fixed eight-frame inputs and raw detector-head outputs.
+    """Expose fixed temporal inputs and raw detector-head outputs.
 
     Calibration-derived tensors are explicit inputs so ONNX never has to trace
     NumPy matrix inversion or Python timestamp processing. Bbox decode remains
@@ -20,6 +20,9 @@ class RaCFormerONNXWrapper(nn.Module):
         self.model = model
         self.image_height = int(image_height)
         self.image_width = int(image_width)
+        self.num_frames = int(
+            model.pts_bbox_head.transformer.decoder.decoder_layer
+            .sampling.num_frames)
         self.debug_intermediates = bool(debug_intermediates)
         self.debug_output_group = debug_output_group
         self.debug_output_names = []
@@ -145,20 +148,23 @@ class RaCFormerONNXWrapper(nn.Module):
                 *radar_voxel_inputs):
         image_shape = (self.image_height, self.image_width, 3)
         img_meta = dict(
-            img_shape=[image_shape] * 8,
-            ori_shape=[image_shape] * 8,
-            pad_shape=[image_shape] * 8,
+            img_shape=[image_shape] * self.num_frames,
+            ori_shape=[image_shape] * self.num_frames,
+            pad_shape=[image_shape] * self.num_frames,
             lidar2img=lidar2img[0],
             decoder_lidar2img=lidar2img,
             img2lidar=img2lidar[0],
             mlp_input=mlp_input,
             time_diff=time_diff,
             velocity_time_diff=velocity_time_diff)
-        if len(radar_voxel_inputs) != 24:
-            raise ValueError('expected voxels, num_points, and coors for 8 frames')
+        expected_radar_inputs = self.num_frames * 3
+        if len(radar_voxel_inputs) != expected_radar_inputs:
+            raise ValueError(
+                'expected voxels, num_points, and coors for {} frames'.format(
+                    self.num_frames))
         radar_points = [
             tuple(radar_voxel_inputs[index:index + 3])
-            for index in range(0, 24, 3)
+            for index in range(0, expected_radar_inputs, 3)
         ]
         img_feats, bev_feats, radar_bev_feats, _ = self.model.extract_feat(
             img=image,
@@ -215,10 +221,17 @@ def build_export_inputs(batch, model):
     lidar2img_np = np.asarray(
         batch.img_meta['lidar2img'], dtype=np.float32)
     img2lidar_np = np.linalg.inv(lidar2img_np).astype(np.float32)
-    mlp_input_np = img2lidar_np[:, :3, :3].reshape(1, 8, 9)
+    num_frames = len(batch.radar_points)
+    if lidar2img_np.shape[0] != num_frames:
+        raise ValueError(
+            'lidar2img frame count {} does not match radar frame count {}'
+            .format(lidar2img_np.shape[0], num_frames))
+    mlp_input_np = img2lidar_np[:, :3, :3].reshape(
+        1, num_frames, 9)
 
     timestamps = np.asarray(
-        batch.img_meta['img_timestamp'], dtype=np.float64).reshape(1, 8, 1)
+        batch.img_meta['img_timestamp'], dtype=np.float64).reshape(
+            1, num_frames, 1)
     time_diff_np = (timestamps[:, :1] - timestamps).mean(
         axis=-1).astype('float32')
     velocity_time_diff_np = time_diff_np[:, 1:2, None].copy()
@@ -244,15 +257,26 @@ def build_export_inputs(batch, model):
     return tuple(tensors)
 
 
-INPUT_NAMES = [
-    'image', 'radar_depth', 'radar_rcs', 'lidar2img', 'img2lidar',
-    'mlp_input', 'time_diff', 'velocity_time_diff',
-]
-for frame_index in range(8):
-    INPUT_NAMES.extend([
-        'radar_voxels_{}'.format(frame_index),
-        'radar_num_points_{}'.format(frame_index),
-        'radar_coors_{}'.format(frame_index),
-    ])
+def get_input_names(num_frames):
+    num_frames = int(num_frames)
+    if num_frames <= 0:
+        raise ValueError('num_frames must be positive')
+    names = [
+        'image', 'radar_depth', 'radar_rcs', 'lidar2img', 'img2lidar',
+        'mlp_input', 'time_diff', 'velocity_time_diff',
+    ]
+    for frame_index in range(num_frames):
+        names.extend([
+            'radar_voxels_{}'.format(frame_index),
+            'radar_num_points_{}'.format(frame_index),
+            'radar_coors_{}'.format(frame_index),
+        ])
+    return names
+
+
+# Retain the legacy symbol for diagnostic scripts that are specific to the
+# original eight-frame checkpoint. Production exporters derive names from the
+# selected config through get_input_names().
+INPUT_NAMES = get_input_names(8)
 
 OUTPUT_NAMES = ['all_cls_scores', 'all_bbox_preds']
