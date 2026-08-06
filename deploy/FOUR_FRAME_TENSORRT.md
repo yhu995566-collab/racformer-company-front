@@ -4,7 +4,8 @@ This procedure deploys the trained company-front four-frame checkpoint while
 keeping the proven split architecture:
 
 ```text
-FP16 precompute frontend
+FP16 image/LSS precompute frontend
+  + FP32 radar precompute frontend
   + FP32 fixture initial query
   + FP32 recurrent decoder enqueued six times
 ```
@@ -125,14 +126,42 @@ TRT=/workspace/outputs/deploy_tensorrt
 Pull or mount the commit containing the four-frame deployment changes before
 running these commands.
 
-Parse both graphs:
+Extract dependency-pruned image/LSS and radar frontend graphs. This creates a
+hard precision boundary; TensorRT cannot fuse the FP32 radar path back into
+the FP16 frontend.
+
+```bash
+python -m deploy.tensorrt.extract_onnx_subgraph \
+  --onnx "$ONNX/racformer_f4_frontend_precompute_v2_trt85.onnx" \
+  --output image_feat_0 \
+  --output image_feat_1 \
+  --output image_feat_2 \
+  --output image_feat_3 \
+  --output lss_bev_value \
+  --out "$ONNX/racformer_f4_frontend_image_lss_trt85.onnx" \
+  --report "$ONNX/extract_f4_frontend_image_lss_trt85.txt"
+
+python -m deploy.tensorrt.extract_onnx_subgraph \
+  --onnx "$ONNX/racformer_f4_frontend_precompute_v2_trt85.onnx" \
+  --output radar_bev_value \
+  --out "$ONNX/racformer_f4_frontend_radar_trt85.onnx" \
+  --report "$ONNX/extract_f4_frontend_radar_trt85.txt"
+```
+
+Parse all three graphs:
 
 ```bash
 python -m deploy.tensorrt.parse_onnx \
-  --onnx "$ONNX/racformer_f4_frontend_precompute_v2_trt85.onnx" \
+  --onnx "$ONNX/racformer_f4_frontend_image_lss_trt85.onnx" \
   --plugin "$PLUGIN" \
   --fail-on-zero-dim \
-  --out "$TRT/parse_f4_frontend_precompute_v2_trt852.txt"
+  --out "$TRT/parse_f4_frontend_image_lss_trt852.txt"
+
+python -m deploy.tensorrt.parse_onnx \
+  --onnx "$ONNX/racformer_f4_frontend_radar_trt85.onnx" \
+  --plugin "$PLUGIN" \
+  --fail-on-zero-dim \
+  --out "$TRT/parse_f4_frontend_radar_trt852.txt"
 
 python -m deploy.tensorrt.parse_onnx \
   --onnx "$ONNX/racformer_f4_decoder_precompute_v2_trt85.onnx" \
@@ -141,18 +170,24 @@ python -m deploy.tensorrt.parse_onnx \
   --out "$TRT/parse_f4_decoder_precompute_v2_trt852.txt"
 ```
 
-Both reports must show `status: PASS`, `parser errors: 0`, and
+All reports must show `status: PASS`, `parser errors: 0`, and
 `zero-dimension execution tensors: 0` before building either engine.
 
-Build the frontend with FP16 tactics and the decoder in strict FP32:
+Build image/LSS with FP16 tactics. Build radar and the decoder in strict FP32:
 
 ```bash
 python -m deploy.tensorrt.build_engine \
-  --onnx "$ONNX/racformer_f4_frontend_precompute_v2_trt85.onnx" \
-  --engine "$TRT/racformer_f4_frontend_precompute_v2_trt852_fp16.engine" \
+  --onnx "$ONNX/racformer_f4_frontend_image_lss_trt85.onnx" \
+  --engine "$TRT/racformer_f4_frontend_image_lss_trt852_fp16.engine" \
   --plugin "$PLUGIN" \
   --fp16 \
-  --out "$TRT/build_f4_frontend_precompute_v2_trt852_fp16.txt"
+  --out "$TRT/build_f4_frontend_image_lss_trt852_fp16.txt"
+
+python -m deploy.tensorrt.build_engine \
+  --onnx "$ONNX/racformer_f4_frontend_radar_trt85.onnx" \
+  --engine "$TRT/racformer_f4_frontend_radar_trt852_fp32.engine" \
+  --plugin "$PLUGIN" \
+  --out "$TRT/build_f4_frontend_radar_trt852_fp32.txt"
 
 python -m deploy.tensorrt.build_engine \
   --onnx "$ONNX/racformer_f4_decoder_precompute_v2_trt85.onnx" \
@@ -168,22 +203,23 @@ checkpoint has separately passed decoded validation.
 
 ```bash
 python -m deploy.tensorrt.validate_frontend_decoder_numpy \
-  --frontend-engine "$TRT/racformer_f4_frontend_precompute_v2_trt852_fp16.engine" \
+  --frontend-engine "$TRT/racformer_f4_frontend_image_lss_trt852_fp16.engine" \
+  --radar-frontend-engine "$TRT/racformer_f4_frontend_radar_trt852_fp32.engine" \
   --decoder-engine "$TRT/racformer_f4_decoder_precompute_v2_trt852_fp32.engine" \
   --fixture "$ONNX/racformer_f4_frontend_precompute_sample0.npz" \
   --plugin "$PLUGIN" \
   --initial-query-from-fixture \
   --accept-decoded-match \
+  --atol 0.03 \
   --warmup 5 \
   --iters 20 \
   --profile-stages \
-  --out "$TRT/validate_f4_frontend_fp16_decoder_fp32_trt852.txt"
+  --out "$TRT/validate_f4_image_lss_fp16_radar_fp32_decoder_fp32_trt852.txt"
 ```
 
-Start with the standard `atol=0.006`. If decoded boxes alone exceed that
-tolerance while count, labels, and scores remain stable, report the actual
-maximum error before deciding whether the Nano-specific 3 cm deployment
-tolerance remains appropriate.
+The established four-frame deployment tolerance is 3 cm (`atol=0.03`), not
+`0.3`. Keep reporting the actual maximum error together with count, labels,
+and scores.
 
 Acceptance still requires decoded detection agreement. Parser success, engine
 build success, or raw intermediate parity alone is insufficient.

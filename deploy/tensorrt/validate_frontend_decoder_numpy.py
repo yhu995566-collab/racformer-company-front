@@ -28,6 +28,10 @@ STATE_OUTPUTS = ('next_query_bbox', 'next_query_feat')
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--frontend-engine', required=True)
+    parser.add_argument(
+        '--radar-frontend-engine',
+        help='Optional dedicated radar frontend engine. Its '
+             'radar_bev_value output overrides the primary frontend output')
     parser.add_argument('--decoder-engine', required=True)
     parser.add_argument('--fixture', required=True)
     parser.add_argument('--out', required=True)
@@ -88,6 +92,9 @@ def main():
         'TensorRT version: {}'.format(trt.__version__),
         'frontend engine: {}'.format(
             os.path.abspath(args.frontend_engine)),
+        'radar frontend engine: {}'.format(
+            os.path.abspath(args.radar_frontend_engine)
+            if args.radar_frontend_engine else 'disabled'),
         'decoder engine: {}'.format(
             os.path.abspath(args.decoder_engine)),
         'fixture: {}'.format(os.path.abspath(args.fixture)),
@@ -118,12 +125,24 @@ def main():
             frontend_engine = runtime.deserialize_cuda_engine(file.read())
         with open(args.decoder_engine, 'rb') as file:
             decoder_engine = runtime.deserialize_cuda_engine(file.read())
-        if frontend_engine is None or decoder_engine is None:
+        radar_frontend_engine = None
+        if args.radar_frontend_engine:
+            with open(args.radar_frontend_engine, 'rb') as file:
+                radar_frontend_engine = runtime.deserialize_cuda_engine(
+                    file.read())
+        if frontend_engine is None or decoder_engine is None or (
+                args.radar_frontend_engine and
+                radar_frontend_engine is None):
             raise RuntimeError('failed to deserialize TensorRT engines')
         free_after_engines, _ = cuda.memory_info()
         frontend_context = frontend_engine.create_execution_context()
         decoder_context = decoder_engine.create_execution_context()
-        if frontend_context is None or decoder_context is None:
+        radar_frontend_context = (
+            radar_frontend_engine.create_execution_context()
+            if radar_frontend_engine is not None else None)
+        if frontend_context is None or decoder_context is None or (
+                radar_frontend_engine is not None and
+                radar_frontend_context is None):
             raise RuntimeError('failed to create TensorRT contexts')
         free_after_contexts, _ = cuda.memory_info()
 
@@ -201,6 +220,74 @@ def main():
                 raise RuntimeError('failed to bind frontend output {}'.format(
                     name))
 
+        radar_frontend_inputs = {}
+        radar_frontend_input_pointers = {}
+        radar_frontend_output_pointers = {}
+        radar_frontend_output_shapes = {}
+        radar_frontend_output_dtypes = {}
+        if radar_frontend_engine is not None:
+            for name in engine_io_names(radar_frontend_engine):
+                mode = radar_frontend_engine.get_tensor_mode(name)
+                dtype = numpy_dtype(
+                    trt, radar_frontend_engine.get_tensor_dtype(name))
+                if mode == trt.TensorIOMode.INPUT:
+                    if name not in fixture:
+                        raise KeyError(
+                            'fixture is missing radar frontend input {}'
+                            .format(name))
+                    array = np.ascontiguousarray(fixture[name], dtype=dtype)
+                    if not radar_frontend_context.set_input_shape(
+                            name, tuple(array.shape)):
+                        raise RuntimeError(
+                            'invalid radar frontend input shape {}: {}'
+                            .format(name, array.shape))
+                    radar_frontend_inputs[name] = array
+                else:
+                    radar_frontend_output_dtypes[name] = dtype
+
+            shape_inputs = radar_frontend_context.infer_shapes()
+            if shape_inputs:
+                raise RuntimeError(
+                    'radar frontend shape inference needs: {}'.format(
+                        shape_inputs))
+            for name in radar_frontend_output_dtypes:
+                shape = tuple(
+                    radar_frontend_context.get_tensor_shape(name))
+                if any(dimension < 0 for dimension in shape):
+                    raise RuntimeError(
+                        'unresolved radar frontend output shape {}: {}'
+                        .format(name, shape))
+                radar_frontend_output_shapes[name] = shape
+            if 'radar_bev_value' not in radar_frontend_output_shapes:
+                raise RuntimeError(
+                    'radar frontend engine does not produce radar_bev_value')
+
+            for name, array in radar_frontend_inputs.items():
+                if name in frontend_input_pointers and (
+                        frontend_inputs[name].shape == array.shape and
+                        frontend_inputs[name].dtype == array.dtype):
+                    pointer = frontend_input_pointers[name]
+                else:
+                    pointer = allocate(array.nbytes)
+                    cuda.check(cuda.lib.cudaMemcpyAsync(
+                        pointer, ctypes.c_void_p(array.ctypes.data),
+                        array.nbytes, CUDA_MEMCPY_HOST_TO_DEVICE, stream),
+                        'radar frontend input H2D')
+                radar_frontend_input_pointers[name] = pointer
+                if not radar_frontend_context.set_tensor_address(
+                        name, pointer.value):
+                    raise RuntimeError(
+                        'failed to bind radar frontend input {}'.format(name))
+            for name, shape in radar_frontend_output_shapes.items():
+                array = np.empty(
+                    shape, dtype=radar_frontend_output_dtypes[name])
+                pointer = allocate(array.nbytes)
+                radar_frontend_output_pointers[name] = pointer
+                if not radar_frontend_context.set_tensor_address(
+                        name, pointer.value):
+                    raise RuntimeError(
+                        'failed to bind radar frontend output {}'.format(name))
+
         decoder_names = engine_io_names(decoder_engine)
         expected = set(STATE_INPUTS + STATE_OUTPUTS + (
             'd_region', 'cls_score'))
@@ -212,7 +299,8 @@ def main():
 
         fixture_frontend_outputs = set(args.frontend_output_from_fixture)
         unknown_fixture_outputs = fixture_frontend_outputs.difference(
-            frontend_output_shapes)
+            set(frontend_output_shapes) |
+            set(radar_frontend_output_shapes))
         if unknown_fixture_outputs:
             raise ValueError(
                 'requested fixture frontend outputs are not produced by the '
@@ -232,6 +320,16 @@ def main():
                 continue
             if name == 'd_region':
                 shape = (1,)
+            elif name in radar_frontend_output_shapes:
+                shape = radar_frontend_output_shapes[name]
+                decoder_dtype = numpy_dtype(
+                    trt, decoder_engine.get_tensor_dtype(name))
+                if decoder_dtype != radar_frontend_output_dtypes[name]:
+                    raise RuntimeError(
+                        'radar frontend output {} dtype {} does not match '
+                        'decoder input dtype {}'.format(
+                            name, radar_frontend_output_dtypes[name],
+                            decoder_dtype))
             elif name in frontend_output_shapes:
                 shape = frontend_output_shapes[name]
             elif name in frontend_inputs:
@@ -306,6 +404,8 @@ def main():
                 continue
             if name in fixture_frontend_pointers:
                 pointer = fixture_frontend_pointers[name]
+            elif name in radar_frontend_output_pointers:
+                pointer = radar_frontend_output_pointers[name]
             elif name in frontend_output_pointers:
                 pointer = frontend_output_pointers[name]
             elif name in frontend_input_pointers:
@@ -366,6 +466,8 @@ def main():
         free_after_buffers, _ = cuda.memory_info()
 
         def execute_pipeline(stage_events=None):
+            decoder_event_start = (
+                2 if radar_frontend_context is not None else 1)
             if stage_events is not None:
                 cuda.check(
                     cuda.lib.cudaEventRecord(stage_events[0], stream),
@@ -376,6 +478,14 @@ def main():
                 cuda.check(
                     cuda.lib.cudaEventRecord(stage_events[1], stream),
                     'frontend end event record')
+            if radar_frontend_context is not None:
+                if not radar_frontend_context.execute_async_v3(stream.value):
+                    raise RuntimeError(
+                        'radar frontend TensorRT execution failed')
+                if stage_events is not None:
+                    cuda.check(
+                        cuda.lib.cudaEventRecord(stage_events[2], stream),
+                        'radar frontend end event record')
             if args.initial_query_from_fixture:
                 bbox_input = initial_query_pointers['query_bbox']
                 feature_input = initial_query_pointers['query_feat']
@@ -403,7 +513,8 @@ def main():
                 if stage_events is not None:
                     cuda.check(
                         cuda.lib.cudaEventRecord(
-                            stage_events[index + 2], stream),
+                            stage_events[
+                                decoder_event_start + index + 1], stream),
                         'decoder {} end event record'.format(index))
                 bbox_input = bbox_buffers[index]
                 feature_input = feature_output
@@ -416,11 +527,15 @@ def main():
 
         latencies = []
         frontend_latencies = []
+        radar_frontend_latencies = []
         decoder_layer_latencies = [[] for _ in range(iterations)]
         stage_events = None
         if args.profile_stages:
+            decoder_event_start = (
+                2 if radar_frontend_context is not None else 1)
             stage_events = [
-                cuda.create_event() for _ in range(iterations + 2)
+                cuda.create_event()
+                for _ in range(decoder_event_start + iterations + 1)
             ]
             events.extend(stage_events)
         for _ in range(args.iters):
@@ -442,10 +557,19 @@ def main():
                     ctypes.byref(elapsed), stage_events[0],
                     stage_events[1]), 'frontend event elapsed time')
                 frontend_latencies.append(elapsed.value)
+                decoder_event_start = 1
+                if radar_frontend_context is not None:
+                    cuda.check(cuda.lib.cudaEventElapsedTime(
+                        ctypes.byref(elapsed), stage_events[1],
+                        stage_events[2]),
+                        'radar frontend event elapsed time')
+                    radar_frontend_latencies.append(elapsed.value)
+                    decoder_event_start = 2
                 for index in range(iterations):
                     cuda.check(cuda.lib.cudaEventElapsedTime(
-                        ctypes.byref(elapsed), stage_events[index + 1],
-                        stage_events[index + 2]),
+                        ctypes.byref(elapsed),
+                        stage_events[decoder_event_start + index],
+                        stage_events[decoder_event_start + index + 1]),
                         'decoder {} event elapsed time'.format(index))
                     decoder_layer_latencies[index].append(elapsed.value)
             cuda.check(cuda.lib.cudaEventDestroy(start), 'cudaEventDestroy')
@@ -564,9 +688,12 @@ def main():
                 'stage profiling: enabled (CUDA event overhead included)',
                 'frontend GPU latency: {}'.format(
                     stats(frontend_latencies)),
-                'recurrent decoder GPU latency: {}'.format(
-                    stats(decoder_totals)),
             ])
+            if radar_frontend_context is not None:
+                lines.append('radar frontend GPU latency: {}'.format(
+                    stats(radar_frontend_latencies)))
+            lines.append('recurrent decoder GPU latency: {}'.format(
+                stats(decoder_totals)))
             lines.extend(
                 'decoder iteration {} GPU latency: {}'.format(
                     index, stats(values))
