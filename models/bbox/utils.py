@@ -86,10 +86,12 @@ def _max_radius(pc_range):
 
 
 def theta_d2xy_coods(
-        theta_d_coords, pc_range=None, map_size=102.4, r=65.0,
+        theta_d_coords, pc_range=None, map_size=102.4, r=None,
         preserve_extra=True):
     xy_coords = theta_d_coords[..., :2].clone()
     if pc_range is None:
+        if r is None:
+            r = 65.0
         center = map_size / 2
         xy_coords[..., 0:1] = (center + theta_d_coords[..., 1:2] * r * torch.cos(theta_d_coords[..., 0:1] * (2 * torch.pi))) / map_size
         xy_coords[..., 1:2] = (center + theta_d_coords[..., 1:2] * r * torch.sin(theta_d_coords[..., 0:1] * (2 * torch.pi))) / map_size
@@ -107,11 +109,13 @@ def theta_d2xy_coods(
 
 
 def xy2theta_d_coods(
-        xy_coords_norm, pc_range=None, map_size=102.4, r=65.0, norm=True,
+        xy_coords_norm, pc_range=None, map_size=102.4, r=None, norm=True,
         preserve_extra=True):
     xy_coords = xy_coords_norm.clone()
     if norm:
         if pc_range is None:
+            if r is None:
+                r = 65.0
             center = map_size / 2
             x = xy_coords[..., 0:1] * map_size - center
             y = xy_coords[..., 1:2] * map_size - center

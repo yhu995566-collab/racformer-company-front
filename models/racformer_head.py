@@ -8,6 +8,7 @@ from mmdet.models.dense_heads import DETRHead
 from mmdet3d.core.bbox.coders import build_bbox_coder
 from mmdet3d.core.bbox.structures.lidar_box3d import LiDARInstance3DBoxes
 from .bbox.utils import normalize_bbox, encode_bbox, theta_d2xy_coods, xy2theta_d_coods
+from .query_initialization import generate_front_grid_points
 from .utils import VERSION
 
 @HEADS.register_module()
@@ -20,6 +21,7 @@ class RaCFormer_head(DETRHead):
                  query_denoising_groups=10,
                  num_clusters=5,
                  query_init_mode='polar',
+                 query_distance_power=1.0,
                  bbox_coder=None,
                  code_size=10,
                  code_weights=[1.0] * 10,
@@ -38,6 +40,9 @@ class RaCFormer_head(DETRHead):
 
         self.num_clusters = num_clusters
         self.query_init_mode = query_init_mode
+        if query_distance_power < 1.0:
+            raise ValueError('query_distance_power must be >= 1.0')
+        self.query_distance_power = float(query_distance_power)
 
         super(RaCFormer_head, self).__init__(num_classes, in_channels, train_cfg=train_cfg, test_cfg=test_cfg, **kwargs)
 
@@ -72,11 +77,8 @@ class RaCFormer_head(DETRHead):
     def generate_points(self):
         num_angles = self.num_query // self.num_clusters
         if self.query_init_mode == 'front_grid':
-            x = torch.linspace(0, 1, self.num_clusters + 2, dtype=torch.float)[1:-1]
-            y = torch.linspace(0, 1, num_angles, dtype=torch.float)
-            x = x.view(1, self.num_clusters).expand(num_angles, self.num_clusters)
-            y = y.view(num_angles, 1).expand(num_angles, self.num_clusters)
-            xy = torch.stack([x, y], dim=-1).flatten(0, 1)
+            xy = generate_front_grid_points(
+                self.num_clusters, num_angles, self.query_distance_power)
             return xy2theta_d_coods(xy, self.pc_range)[..., :2]
 
         if self.query_init_mode != 'polar':
