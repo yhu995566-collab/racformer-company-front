@@ -30,6 +30,10 @@ class_names = [
     'car', 'truck', 'trailer', 'bus', 'construction_vehicle', 'bicycle',
     'motorcycle', 'pedestrian', 'traffic_cone', 'barrier'
 ]
+evaluation_distance_ranges = [
+    (0, 50), (50, 100), (100, 150), (150, 200),
+    (200, 250), (250, 300), (300, 350), (200, 350)
+]
 
 train_pipeline = [
     dict(type='LoadFrontCameraSweeps', sweeps_num=num_frames - 1),
@@ -119,13 +123,16 @@ model = dict(
 data = dict(
     train=dict(
         pipeline=train_pipeline, num_sweeps=num_frames - 1,
-        point_cloud_range=point_cloud_range),
+        point_cloud_range=point_cloud_range,
+        evaluation_distance_ranges=evaluation_distance_ranges),
     val=dict(
         pipeline=test_pipeline, num_sweeps=num_frames - 1,
-        point_cloud_range=point_cloud_range),
+        point_cloud_range=point_cloud_range,
+        evaluation_distance_ranges=evaluation_distance_ranges),
     test=dict(
         pipeline=test_pipeline, num_sweeps=num_frames - 1,
-        point_cloud_range=point_cloud_range))
+        point_cloud_range=point_cloud_range,
+        evaluation_distance_ranges=evaluation_distance_ranges))
 
 evaluation_output_dir = (
     'outputs/3dh_query_company_front_350m_f4/evaluation/')

@@ -20,12 +20,22 @@ class CompanyFrontDataset(Custom3DDataset):
 
     def __init__(self, camera_key='CAM_FRONT', radar_key='RADAR_FRONT',
                  num_sweeps=7,
-                 point_cloud_range=(0, -20, -3, 200, 20, 3), **kwargs):
+                 point_cloud_range=(0, -20, -3, 200, 20, 3),
+                 evaluation_distance_ranges=((0, 50), (50, 100), (100, 200)),
+                 **kwargs):
         self.camera_key = camera_key
         self.radar_key = radar_key
         self.num_sweeps = num_sweeps
         self.point_cloud_range = np.asarray(
             point_cloud_range, dtype=np.float32)
+        self.evaluation_distance_ranges = tuple(
+            (float(min_distance), float(max_distance))
+            for min_distance, max_distance in evaluation_distance_ranges)
+        if any(min_distance < 0 or max_distance <= min_distance
+               for min_distance, max_distance
+               in self.evaluation_distance_ranges):
+            raise ValueError(
+                'evaluation_distance_ranges must contain valid positive ranges')
         super().__init__(**kwargs)
 
     def load_annotations(self, ann_file):
@@ -327,7 +337,7 @@ class CompanyFrontDataset(Custom3DDataset):
             total_tp / max(float(total_gt), 1.0)
         metrics['company/total_gt'] = total_gt
 
-        for min_distance, max_distance in ((0, 50), (50, 100), (100, 200)):
+        for min_distance, max_distance in self.evaluation_distance_ranges:
             range_predictions = self._filter_distance(
                 predictions, min_distance, max_distance, with_scores=True)
             range_ground_truth = self._filter_distance(
@@ -352,7 +362,9 @@ class CompanyFrontDataset(Custom3DDataset):
                 range_fp += bev['threshold_fp']
                 range_gt += bev['num_gt']
 
-            prefix = f'company/range_{min_distance}_{max_distance}m'
+            min_label = f'{min_distance:g}'
+            max_label = f'{max_distance:g}'
+            prefix = f'company/range_{min_label}_{max_label}m'
             metrics[f'{prefix}_BEV_mAP@{bev_iou_threshold:g}'] = \
                 float(np.mean(range_bev_aps)) if range_bev_aps else 0.0
             metrics[f'{prefix}_3D_mAP@{iou_3d_threshold:g}'] = \

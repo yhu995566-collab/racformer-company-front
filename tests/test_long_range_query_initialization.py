@@ -1,6 +1,7 @@
 import ast
 import importlib.util
 import math
+import runpy
 import sys
 import types
 from pathlib import Path
@@ -79,3 +80,31 @@ def test_experiment_config_declares_consistent_long_range_geometry():
     }
     assert assignments["point_cloud_range"] == [0.0, -20.0, -3.0, 350.0, 20.0, 3.0]
     assert assignments["voxel_size"] == [0.5, 0.5, 6.0]
+
+
+def test_q1_to_q5_configs_keep_expected_query_budgets():
+    expected = {
+        "q1": (900, 30, 30, 1.0),
+        "q2": (900, 30, 30, 1.5),
+        "q3": (900, 30, 30, 2.0),
+        "q4": (900, 45, 20, 2.0),
+        "q5": (1200, 30, 40, 2.0),
+    }
+    for name, values in expected.items():
+        config = runpy.run_path(str(ROOT / "configs" / f"3dh_query_{name}.py"))
+        head = config["model"]["pts_bbox_head"]
+        actual = (
+            head["num_query"], head["num_clusters"],
+            head["transformer"]["num_ray"], head["query_distance_power"])
+        assert actual == values
+        assert actual[0] == actual[1] * actual[2]
+
+
+def test_long_range_evaluation_bins_cover_350m_and_overall_far_range():
+    config = runpy.run_path(
+        str(ROOT / "configs" / "3dh_query_company_front_350m_f4.py"))
+    ranges = config["evaluation_distance_ranges"]
+    assert (200, 250) in ranges
+    assert (250, 300) in ranges
+    assert (300, 350) in ranges
+    assert (200, 350) in ranges
