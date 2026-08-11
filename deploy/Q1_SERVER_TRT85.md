@@ -168,6 +168,7 @@ FP16。最终以 decoded detections 和 profile 为准，不能只根据 Engine 
 | 2026-08-11 | `q1_trt85_l20` | 编译 L20 TensorRT 插件 | PASS | `libracformer_bev_pool_v2_trt.so`，156368 bytes，`ctypes.CDLL` 加载通过 |
 | 2026-08-11 | `q1_trt85_l20` | Q1 混合精度 Engine 构建 | PASS | image/LSS FP16、radar FP32、decoder FP32 均构建成功 |
 | 2026-08-11 | `q1_trt85_l20` | 首次联合验证 | VALIDATOR BUG | 分类和检测类别一致，但验证器残留固定 65 m 极径及 200 m 后处理范围；不是 Engine 构建失败 |
+| 2026-08-11 | `q1_trt85_l20` | 修正 Q1 范围后重新联合验证 | PASS | 19/19 detections；box 最大误差 0.00666046 m；score 最大误差 0.00023659；labels 一致 |
 
 本次插件依赖记录：
 
@@ -181,3 +182,18 @@ plugin: /workspace/3DH-Query/build/tensorrt_plugins_trt852_l20/libracformer_bev_
 该 `.so` 只用于服务器 L20 实验，禁止传到 aarch64 Nano。服务器 CUDA
 runtime 与 Nano CUDA 11.4 不同，因此服务器结果用于判断 Q1 精度组合是否
 可行；最终 Engine、插件、耗时和显存仍必须在 Nano 本地重新生成和测量。
+
+混合精度基线的 raw 输出记录：
+
+```text
+all_cls_scores: max_abs_error=0.02356100, mean_abs_error=0.00023250
+all_bbox_preds: max_abs_error=0.31193542, mean_abs_error=0.00072453
+decoded detections: 19/19
+decoded boxes: close=True, max_abs_error=0.00666046 m
+decoded scores: close=True, max_abs_error=0.00023659
+decoded labels: equal=True
+deployment acceptance: True
+```
+
+raw bbox 最大误差来自未进入最终 decoded detections 的 query；最终检测框
+最大误差为 6.66 mm，低于当前 3 cm 验收门限，因此基线正式通过。
