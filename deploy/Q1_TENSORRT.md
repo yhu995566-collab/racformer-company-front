@@ -8,6 +8,10 @@ Q1 cannot reuse any 200 m fixture, ONNX graph, or engine. It reuses only the
 three-engine deployment architecture, export/runtime code, plugin source, and
 six-enqueue recurrent scheduling logic.
 
+Nano 的完整重配、软件安装记录、文件传输清单、SHA256 校验和后续执行日志
+统一维护在 `deploy/NANO_Q1_ENVIRONMENT_SYNC.md`。Nano 上的操作完成后必须
+同步更新该台账，不能只保留终端输出。
+
 ## 1. Synchronize The Exact Code
 
 Use branch `3dh-query-stage1-radar-candidate-recall` at commit `d4572ea` or a
