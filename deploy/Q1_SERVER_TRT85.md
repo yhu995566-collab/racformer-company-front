@@ -166,6 +166,8 @@ FP16。最终以 decoded detections 和 profile 为准，不能只根据 Engine 
 | 日期 | 环境 | 操作 | 结果 | 证据 |
 |---|---|---|---|---|
 | 2026-08-11 | `q1_trt85_l20` | 编译 L20 TensorRT 插件 | PASS | `libracformer_bev_pool_v2_trt.so`，156368 bytes，`ctypes.CDLL` 加载通过 |
+| 2026-08-11 | `q1_trt85_l20` | Q1 混合精度 Engine 构建 | PASS | image/LSS FP16、radar FP32、decoder FP32 均构建成功 |
+| 2026-08-11 | `q1_trt85_l20` | 首次联合验证 | VALIDATOR BUG | 分类和检测类别一致，但验证器残留固定 65 m 极径及 200 m 后处理范围；不是 Engine 构建失败 |
 
 本次插件依赖记录：
 

@@ -631,11 +631,11 @@ def main():
 
         actual_decoded = decode_detections(
             actual_outputs['all_cls_scores'],
-            actual_outputs['all_bbox_preds'])
+            actual_outputs['all_bbox_preds'], pc_range)
         # Compare early exit with the established final six-layer result,
         # rather than with the same intermediate fixture layer.
         reference_decoded = decode_detections(
-            fixture['all_cls_scores'], fixture['all_bbox_preds'])
+            fixture['all_cls_scores'], fixture['all_bbox_preds'], pc_range)
         actual_boxes, actual_scores, actual_labels = actual_decoded
         ref_boxes, ref_scores, ref_labels = reference_decoded
         boxes_match = actual_boxes.shape == ref_boxes.shape and np.allclose(

@@ -48,8 +48,11 @@ def write_report(path, lines):
 def recurrent_bbox_to_detection(bbox_preds, pc_range):
     theta = bbox_preds[..., 0:1]
     distance = bbox_preds[..., 1:2]
-    x = distance * 65.0 * np.cos(theta * (2.0 * np.pi))
-    y = distance * 65.0 * np.sin(theta * (2.0 * np.pi))
+    x_radius = max(abs(float(pc_range[0])), abs(float(pc_range[3])))
+    y_radius = max(abs(float(pc_range[1])), abs(float(pc_range[4])))
+    radius = np.sqrt(x_radius ** 2 + y_radius ** 2)
+    x = distance * radius * np.cos(theta * (2.0 * np.pi))
+    y = distance * radius * np.sin(theta * (2.0 * np.pi))
     x = np.clip(
         (x - pc_range[0]) / (pc_range[3] - pc_range[0]), 0.0, 1.0)
     y = np.clip(
@@ -322,9 +325,9 @@ def main():
 
         actual_decoded = decode_detections(
             actual_outputs['all_cls_scores'],
-            actual_outputs['all_bbox_preds'])
+            actual_outputs['all_bbox_preds'], pc_range)
         reference_decoded = decode_detections(
-            fixture['all_cls_scores'], fixture['all_bbox_preds'])
+            fixture['all_cls_scores'], fixture['all_bbox_preds'], pc_range)
         actual_boxes, actual_scores, actual_labels = actual_decoded
         ref_boxes, ref_scores, ref_labels = reference_decoded
         boxes_match = actual_boxes.shape == ref_boxes.shape and np.allclose(
