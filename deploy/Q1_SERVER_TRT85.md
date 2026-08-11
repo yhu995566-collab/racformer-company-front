@@ -160,3 +160,22 @@ bash scripts/test_q1_fp16_matrix.sh l20
 `--fp16` 表示允许 TensorRT 选择 FP16 tactic，不保证每层或插件都变成
 FP16。最终以 decoded detections 和 profile 为准，不能只根据 Engine 文件名
 判断精度或性能。
+
+## 8. 执行记录
+
+| 日期 | 环境 | 操作 | 结果 | 证据 |
+|---|---|---|---|---|
+| 2026-08-11 | `q1_trt85_l20` | 编译 L20 TensorRT 插件 | PASS | `libracformer_bev_pool_v2_trt.so`，156368 bytes，`ctypes.CDLL` 加载通过 |
+
+本次插件依赖记录：
+
+```text
+architecture: x86_64
+libnvinfer: /lib/x86_64-linux-gnu/libnvinfer.so.8
+libcudart: /usr/local/cuda/lib64/libcudart.so.12
+plugin: /workspace/3DH-Query/build/tensorrt_plugins_trt852_l20/libracformer_bev_pool_v2_trt.so
+```
+
+该 `.so` 只用于服务器 L20 实验，禁止传到 aarch64 Nano。服务器 CUDA
+runtime 与 Nano CUDA 11.4 不同，因此服务器结果用于判断 Q1 精度组合是否
+可行；最终 Engine、插件、耗时和显存仍必须在 Nano 本地重新生成和测量。
