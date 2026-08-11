@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
-BRANCH="${BRANCH:-3dh-query-stage1-radar-candidate-recall}"
+BRANCH="${BRANCH:-q1-tensorrt-deployment}"
 OUTPUT_DIR="${1:-$REPO_ROOT/outputs/nano_q1_offline_transfer}"
 
 if ! git show-ref --verify --quiet "refs/heads/$BRANCH"; then

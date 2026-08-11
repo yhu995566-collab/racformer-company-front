@@ -12,15 +12,18 @@ Nano 的完整重配、软件安装记录、文件传输清单、SHA256 校验�
 统一维护在 `deploy/NANO_Q1_ENVIRONMENT_SYNC.md`。Nano 上的操作完成后必须
 同步更新该台账，不能只保留终端输出。
 
+当前 Q1 checkpoint、全新服务器 TRT 8.5 容器和 FP16 精度矩阵实验记录在
+`deploy/Q1_SERVER_TRT85.md`。服务器实验通过前暂停 Nano 阶段。
+
 ## 1. Synchronize The Exact Code
 
-Use branch `3dh-query-stage1-radar-candidate-recall` at commit `d4572ea` or a
+Use branch `q1-tensorrt-deployment` at commit `d4572ea` or a
 later commit containing the Q1 deployment scripts on the export server and
 TensorRT 8.5 container mount:
 
 ```bash
-git checkout 3dh-query-stage1-radar-candidate-recall
-git pull --ff-only origin 3dh-query-stage1-radar-candidate-recall
+git checkout q1-tensorrt-deployment
+git pull --ff-only origin q1-tensorrt-deployment
 git rev-parse HEAD
 git status --short
 ```

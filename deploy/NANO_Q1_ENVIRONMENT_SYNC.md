@@ -37,7 +37,7 @@ PyPI TensorRT 覆盖 JetPack 自带的 aarch64 TensorRT。
 代码分支固定为：
 
 ```text
-3dh-query-stage1-radar-candidate-recall
+q1-tensorrt-deployment
 ```
 
 ## 2. 固定目录
@@ -76,8 +76,8 @@ Q1 输入。
 ```bash
 cd /home/yanhao/projects/3DH-Query
 git fetch origin
-git checkout 3dh-query-stage1-radar-candidate-recall
-git pull --ff-only origin 3dh-query-stage1-radar-candidate-recall
+git checkout q1-tensorrt-deployment
+git pull --ff-only origin q1-tensorrt-deployment
 git status --short
 git rev-parse HEAD
 ```
@@ -115,8 +115,8 @@ Nano 已有仓库且 `git status --short` 为空时：
 cd /home/cttest/RaCFormer
 git status --short
 git fetch /home/cttest/q1_offline_transfer/code/3dh_query_q1_code_<commit>.bundle \
-  3dh-query-stage1-radar-candidate-recall
-git checkout 3dh-query-stage1-radar-candidate-recall
+  q1-tensorrt-deployment
+git checkout q1-tensorrt-deployment
 git merge --ff-only FETCH_HEAD
 git rev-parse HEAD
 ```
@@ -131,7 +131,7 @@ git clone \
   /home/cttest/q1_offline_transfer/code/3dh_query_q1_code_<commit>.bundle \
   /home/cttest/RaCFormer
 cd /home/cttest/RaCFormer
-git checkout 3dh-query-stage1-radar-candidate-recall
+git checkout q1-tensorrt-deployment
 git rev-parse HEAD
 ```
 
