@@ -15,8 +15,8 @@ Nano 的完整重配、软件安装记录、文件传输清单、SHA256 校验�
 ## 1. Synchronize The Exact Code
 
 Use branch `3dh-query-stage1-radar-candidate-recall` at commit `d4572ea` or a
-later commit containing the Q1 deployment scripts on the export server,
-TensorRT 8.5 container mount, and Nano:
+later commit containing the Q1 deployment scripts on the export server and
+TensorRT 8.5 container mount:
 
 ```bash
 git checkout 3dh-query-stage1-radar-candidate-recall
@@ -27,6 +27,10 @@ git status --short
 
 Do not copy only the Q1 config and checkpoint to an older Nano checkout. The
 350 m coordinate conversion depends on the updated model source.
+Nano does not need Internet access: package the synchronized local Git branch
+with `scripts/package_q1_nano_offline.sh`, transfer the bundle through the
+local staging directory, and import it according to
+`deploy/NANO_Q1_ENVIRONMENT_SYNC.md`.
 
 The Q1 deployment config is:
 
@@ -127,7 +131,7 @@ Do not add `--fp16` to the radar or decoder build. Acceptance requires decoded
 count, boxes, scores, and labels to match; parser or build success is not
 sufficient.
 
-## 5. Transfer To Nano
+## 5. Transfer To Nano Through The Local Staging Directory
 
 Do not transfer L20 engines or its x86 plugin. Transfer these architecture-
 independent artifacts from `deploy_onnx_q1`:
@@ -139,8 +143,10 @@ independent artifacts from `deploy_onnx_q1`:
 3dh_query_q1_frontend_precompute_sample0.npz
 ```
 
-Put them under the Nano checkout's `outputs/deploy_onnx_q1`. Synchronize the
-same Git commit and build/load the Orin plugin locally at:
+First copy these files and their SHA256 manifest from the server to the local
+staging directory, verify them locally, and then copy them to Nano. Put them
+under the Nano checkout's `outputs/deploy_onnx_q1`. Import the same code commit
+from the offline Git bundle and build/load the Orin plugin locally at:
 
 ```text
 build/tensorrt_plugins_orin/libracformer_bev_pool_v2_trt.so
