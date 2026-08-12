@@ -119,8 +119,9 @@ def describe(name, tensor):
         name, tuple(tensor.shape), tensor.dtype)
 
 
-def to_detection_bbox(bbox_preds, pc_range):
-    bbox_preds = theta_d2xy_coods(bbox_preds, pc_range)
+def to_detection_bbox(bbox_preds, pc_range, polar_radius):
+    bbox_preds = theta_d2xy_coods(
+        bbox_preds, pc_range, r=polar_radius)
     x = bbox_preds[..., 0:1] * (
         pc_range[3] - pc_range[0]) + pc_range[0]
     y = bbox_preds[..., 1:2] * (
@@ -176,6 +177,8 @@ def main():
         wrapper = RaCFormerONNXWrapper(
             runner.model, image_height, image_width).eval()
         decoder = runner.model.pts_bbox_head.transformer.decoder
+        polar_radius = float(getattr(
+            decoder.decoder_layer, 'polar_radius', 65.0))
         captured = {}
 
         def capture_first(module, inputs):
@@ -258,7 +261,7 @@ def main():
                 query_feat, cls_score, query_bbox = recurrent_outputs
                 recurrent_cls.append(cls_score)
                 recurrent_bbox.append(to_detection_bbox(
-                    query_bbox, decoder.pc_range))
+                    query_bbox, decoder.pc_range, polar_radius))
             loop_outputs = (
                 torch.stack(recurrent_cls),
                 torch.stack(recurrent_bbox),
@@ -282,6 +285,7 @@ def main():
 
         lines.extend([
             'decoder iterations: {}'.format(decoder.num_layers),
+            'decoder polar radius: {:.6f} m'.format(polar_radius),
             'd_region schedule: {}'.format(
                 [float(value) for value in d_regions.cpu()]),
             'PyTorch recurrent loop close: {}'.format(loop_close),
@@ -309,6 +313,8 @@ def main():
             arrays['decoder_d_regions'] = d_regions.detach().cpu().numpy()
             arrays['decoder_pc_range'] = np.asarray(
                 decoder.pc_range, dtype=np.float32)
+            arrays['decoder_polar_radius'] = np.asarray(
+                polar_radius, dtype=np.float32)
             arrays.update({
                 name: tensor.detach().cpu().numpy()
                 for name, tensor in zip(

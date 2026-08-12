@@ -22,6 +22,7 @@ class RaCFormer_head(DETRHead):
                  num_clusters=5,
                  query_init_mode='polar',
                  query_distance_power=1.0,
+                 polar_radius=65.0,
                  bbox_coder=None,
                  code_size=10,
                  code_weights=[1.0] * 10,
@@ -43,8 +44,21 @@ class RaCFormer_head(DETRHead):
         if query_distance_power < 1.0:
             raise ValueError('query_distance_power must be >= 1.0')
         self.query_distance_power = float(query_distance_power)
+        if polar_radius <= 0:
+            raise ValueError('polar_radius must be positive')
+        self.polar_radius = float(polar_radius)
 
         super(RaCFormer_head, self).__init__(num_classes, in_channels, train_cfg=train_cfg, test_cfg=test_cfg, **kwargs)
+
+        transformer_radius = float(getattr(
+            self.transformer, 'polar_radius', 65.0))
+        if not math.isclose(
+                transformer_radius, self.polar_radius,
+                rel_tol=0.0, abs_tol=1e-6):
+            raise ValueError(
+                'pts_bbox_head polar_radius ({}) must match transformer '
+                'polar_radius ({})'.format(
+                    self.polar_radius, transformer_radius))
 
         self.code_weights = nn.Parameter(torch.tensor(self.code_weights), requires_grad=False)
         self.bbox_coder = build_bbox_coder(bbox_coder)
@@ -79,7 +93,8 @@ class RaCFormer_head(DETRHead):
         if self.query_init_mode == 'front_grid':
             xy = generate_front_grid_points(
                 self.num_clusters, num_angles, self.query_distance_power)
-            return xy2theta_d_coods(xy, self.pc_range)[..., :2]
+            return xy2theta_d_coods(
+                xy, self.pc_range, r=self.polar_radius)[..., :2]
 
         if self.query_init_mode != 'polar':
             raise ValueError(f'Unknown query_init_mode: {self.query_init_mode}')
@@ -186,11 +201,12 @@ class RaCFormer_head(DETRHead):
 
             wlh = known_bbox_expand[..., 3:6].clone()
             known_bbox_expand = encode_bbox(known_bbox_expand, self.pc_range)
-            known_bbox_expand = xy2theta_d_coods(known_bbox_expand, self.pc_range)
+            known_bbox_expand = xy2theta_d_coods(
+                known_bbox_expand, self.pc_range, r=self.polar_radius)
 
             # noise on the box
             if self.dn_bbox_noise_scale > 0:
-                r = 65.0
+                r = self.polar_radius
                 rand_prob = torch.rand_like(known_bbox_expand) * 2 - 1.0
                 arc_len_ratio = torch.sqrt(wlh[...,0:1]**2+wlh[...,1:2]**2) / (2*torch.pi*known_bbox_expand[..., 1:2]*r)
                 theta_delta = torch.mul(rand_prob[..., 0:1], arc_len_ratio/2) * self.dn_bbox_noise_scale * known_bbox_expand[..., 1:2]

@@ -76,6 +76,8 @@ class DecoderStackProbe(nn.Module):
         self.decoder_layer = copy.deepcopy(decoder_layer)
         self.num_layers = int(num_layers)
         self.pc_range = list(pc_range)
+        self.polar_radius = float(getattr(
+            self.decoder_layer, 'polar_radius', 65.0))
         self.image_height = int(image_height)
         self.image_width = int(image_width)
         self.num_frames = int(self.decoder_layer.sampling.num_frames)
@@ -124,7 +126,7 @@ class DecoderStackProbe(nn.Module):
                 query_bbox = tensorrt_fusion_barrier(query_bbox)
             cls_scores.append(cls_score)
             bbox_preds.append(theta_d2xy_coods(
-                bbox_pred, self.pc_range))
+                bbox_pred, self.pc_range, r=self.polar_radius))
         cls_scores = torch.stack(cls_scores)
         bbox_preds = torch.stack(bbox_preds)
         if not self.detection_outputs:
@@ -284,6 +286,10 @@ def main():
             name: tensor.detach().cpu().numpy()
             for name, tensor in zip(output_names, probe_outputs)
         })
+        arrays['decoder_pc_range'] = np.asarray(
+            decoder.pc_range, dtype=np.float32)
+        arrays['decoder_polar_radius'] = np.asarray(
+            probe.polar_radius, dtype=np.float32)
         np.savez_compressed(fixture_path, **arrays)
 
         output_path = os.path.abspath(args.out)

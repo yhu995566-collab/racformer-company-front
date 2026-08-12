@@ -45,11 +45,11 @@ def write_report(path, lines):
     print('Decoder loop validation report: {}'.format(path))
 
 
-def recurrent_bbox_to_detection(bbox_preds, pc_range):
+def recurrent_bbox_to_detection(bbox_preds, pc_range, polar_radius=65.0):
     theta = bbox_preds[..., 0:1]
     distance = bbox_preds[..., 1:2]
-    x = distance * 65.0 * np.cos(theta * (2.0 * np.pi))
-    y = distance * 65.0 * np.sin(theta * (2.0 * np.pi))
+    x = distance * polar_radius * np.cos(theta * (2.0 * np.pi))
+    y = distance * polar_radius * np.sin(theta * (2.0 * np.pi))
     x = np.clip(
         (x - pc_range[0]) / (pc_range[3] - pc_range[0]), 0.0, 1.0)
     y = np.clip(
@@ -108,6 +108,11 @@ def main():
         d_regions = np.ascontiguousarray(
             fixture['decoder_d_regions'], dtype=np.float32)
         pc_range = np.asarray(fixture['decoder_pc_range'], dtype=np.float32)
+        polar_radius = float(np.asarray(
+            fixture['decoder_polar_radius']
+            if 'decoder_polar_radius' in fixture else 65.0).reshape(-1)[0])
+        if polar_radius <= 0:
+            raise RuntimeError('decoder_polar_radius must be positive')
         iterations = int(d_regions.size)
         if iterations <= 0:
             raise RuntimeError('decoder_d_regions is empty')
@@ -296,11 +301,12 @@ def main():
         actual_outputs = {
             'all_cls_scores': np.stack(cls_layers),
             'all_bbox_preds': recurrent_bbox_to_detection(
-                np.stack(bbox_layers), pc_range),
+                np.stack(bbox_layers), pc_range, polar_radius),
         }
         raw_passed = True
         lines.extend([
             'decoder iterations: {}'.format(iterations),
+            'decoder polar radius: {:.6f} m'.format(polar_radius),
             'd_region schedule: {}'.format(d_regions.tolist()),
             '',
             '=== Numerical comparison ===',

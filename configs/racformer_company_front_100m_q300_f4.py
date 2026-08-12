@@ -2,8 +2,11 @@ _base_ = ['./racformer_company_front_velocity_v2.py']
 
 # Delivery-oriented 100 m baseline: current frame + 3 temporal sweeps.
 # Radar/LiDAR points and GT are cropped before depth projection/voxelization.
+# This legacy experiment was trained with the historical 65 m polar decoder
+# radius. Keep it explicit so its existing checkpoints remain reproducible.
 num_frames = 4
 num_cams = 1
+polar_radius = 65.0
 
 point_cloud_range = [0.0, -20.0, -3.0, 100.0, 20.0, 3.0]
 voxel_size = [0.5, 0.5, 6.0]
@@ -103,10 +106,12 @@ model = dict(
         num_clusters=20,
         query_init_mode='front_grid',
         query_distance_power=1.0,
+        polar_radius=polar_radius,
         transformer=dict(
             num_frames=num_frames,
             num_ray=15,
             pc_range=point_cloud_range,
+            polar_radius=polar_radius,
             spatial_shapes=(bev_h, bev_w)),
         bbox_coder=dict(
             post_center_range=point_cloud_range,

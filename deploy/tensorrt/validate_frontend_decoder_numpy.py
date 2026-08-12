@@ -150,6 +150,11 @@ def main():
         d_regions = np.ascontiguousarray(
             fixture['decoder_d_regions'], dtype=np.float32)
         pc_range = np.asarray(fixture['decoder_pc_range'], dtype=np.float32)
+        polar_radius = float(np.asarray(
+            fixture['decoder_polar_radius']
+            if 'decoder_polar_radius' in fixture else 65.0).reshape(-1)[0])
+        if polar_radius <= 0:
+            raise RuntimeError('decoder_polar_radius must be positive')
         available_iterations = int(d_regions.size)
         if available_iterations <= 0:
             raise RuntimeError('decoder_d_regions is empty')
@@ -601,11 +606,12 @@ def main():
         actual_outputs = {
             'all_cls_scores': np.stack(cls_layers),
             'all_bbox_preds': recurrent_bbox_to_detection(
-                np.stack(bbox_layers), pc_range),
+                np.stack(bbox_layers), pc_range, polar_radius),
         }
         raw_passed = True
         lines.extend([
             'decoder iterations: {}'.format(iterations),
+            'decoder polar radius: {:.6f} m'.format(polar_radius),
             'available decoder iterations: {}'.format(
                 available_iterations),
             'decoder early exit: {}'.format(

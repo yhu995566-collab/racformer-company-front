@@ -225,8 +225,11 @@ def main():
         d_regions = np.asarray(
             decoder.decoder_layer.d_region_list, dtype=np.float32)
         pc_range = np.asarray(decoder.pc_range, dtype=np.float32)
+        polar_radius = float(getattr(
+            decoder.decoder_layer, 'polar_radius', 65.0))
         lines.extend([
             'decoder iterations: {}'.format(decoder.num_layers),
+            'decoder polar radius: {:.6f} m'.format(polar_radius),
             'd_region schedule: {}'.format(d_regions.tolist()),
             '',
             '=== Frontend tensors ===',
@@ -252,6 +255,8 @@ def main():
         })
         arrays['decoder_d_regions'] = d_regions
         arrays['decoder_pc_range'] = pc_range
+        arrays['decoder_polar_radius'] = np.asarray(
+            polar_radius, dtype=np.float32)
         arrays.update({
             name: tensor.detach().cpu().numpy()
             for name, tensor in zip(

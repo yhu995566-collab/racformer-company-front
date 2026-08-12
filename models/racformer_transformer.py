@@ -30,6 +30,7 @@ class RaCFormerTransformer(BaseModule):
                  img_depth_num=3, 
                  bev_depth_num=5, 
                  pc_range=[], 
+                 polar_radius=65.0,
                  num_ray=150, 
                  d_region_list = [0.15, 0.1, 0.1, 0.08, 0.08, 0.05], 
                  spatial_shapes=(128, 128), 
@@ -40,9 +41,12 @@ class RaCFormerTransformer(BaseModule):
 
         self.embed_dims = embed_dims
         self.pc_range = pc_range
+        if polar_radius <= 0:
+            raise ValueError('polar_radius must be positive')
+        self.polar_radius = float(polar_radius)
 
         self.decoder = RaCFormerTransformerDecoder(embed_dims, num_frames, num_cams, num_points, num_points_bev, num_layers, num_levels, num_classes, code_size, \
-                                                   img_depth_num=img_depth_num, bev_depth_num=bev_depth_num, pc_range=pc_range, num_ray=num_ray, \
+                                                   img_depth_num=img_depth_num, bev_depth_num=bev_depth_num, pc_range=pc_range, polar_radius=self.polar_radius, num_ray=num_ray, \
                                                     d_region_list=d_region_list, spatial_shapes=spatial_shapes)
 
     @torch.no_grad()
@@ -72,6 +76,7 @@ class RaCFormerTransformerDecoder(BaseModule):
                  img_depth_num=3, 
                  bev_depth_num=5, 
                  pc_range=[], 
+                 polar_radius=65.0,
                  num_ray=150, 
                  d_region_list=[0.15, 0.1, 0.1, 0.08, 0.08, 0.05], 
                  spatial_shapes=(128, 128), 
@@ -80,11 +85,12 @@ class RaCFormerTransformerDecoder(BaseModule):
         self.num_layers = num_layers
         self.num_cams = num_cams
         self.pc_range = pc_range
+        self.polar_radius = float(polar_radius)
 
         # params are shared across all decoder layers
         self.decoder_layer = RaCFormerTransformerDecoderLayer(
             embed_dims, num_frames, num_cams, num_points, num_points_bev, num_levels, num_classes, code_size, \
-                img_depth_num=img_depth_num, bev_depth_num=bev_depth_num, num_ray=num_ray, pc_range=pc_range, \
+                img_depth_num=img_depth_num, bev_depth_num=bev_depth_num, num_ray=num_ray, pc_range=pc_range, polar_radius=self.polar_radius, \
                     d_region_list=d_region_list, spatial_shapes=spatial_shapes,
         )
 
@@ -153,7 +159,8 @@ class RaCFormerTransformerDecoder(BaseModule):
                 query_feat = tensorrt_fusion_barrier(query_feat)
                 query_bbox = tensorrt_fusion_barrier(query_bbox)
 
-            bbox_pred = theta_d2xy_coods(bbox_pred, self.pc_range)
+            bbox_pred = theta_d2xy_coods(
+                bbox_pred, self.pc_range, r=self.polar_radius)
 
             cls_scores.append(cls_score)
             bbox_preds.append(bbox_pred)
@@ -180,6 +187,7 @@ class RaCFormerTransformerDecoderLayer(BaseModule):
                  bev_depth_num=5, 
                  num_ray=150, 
                  pc_range=[], 
+                 polar_radius=65.0,
                  d_region_list = [0.15, 0.1, 0.1, 0.08, 0.08, 0.05], 
                  spatial_shapes=(128, 128), 
                  init_cfg=None):
@@ -189,6 +197,7 @@ class RaCFormerTransformerDecoderLayer(BaseModule):
         self.num_classes = num_classes
         self.code_size = code_size
         self.pc_range = pc_range
+        self.polar_radius = float(polar_radius)
 
         self.position_encoder = nn.Sequential(
             nn.Linear(3, self.embed_dims), 
@@ -199,18 +208,21 @@ class RaCFormerTransformerDecoderLayer(BaseModule):
             nn.ReLU(inplace=True),
         )
 
-        self.self_attn = ScaleAdaptiveSelfAttention(embed_dims, num_heads=8, dropout=0.1, pc_range=pc_range)
+        self.self_attn = ScaleAdaptiveSelfAttention(
+            embed_dims, num_heads=8, dropout=0.1, pc_range=pc_range,
+            polar_radius=self.polar_radius)
         self.sampling = RaCFormerSampling(embed_dims, num_frames=num_frames,
                                          num_cams=num_cams, num_groups=4,
                                          num_points=num_points,
                                          num_levels=num_levels,
                                          depth_num=img_depth_num,
-                                         pc_range=pc_range)
+                                         pc_range=pc_range,
+                                         polar_radius=self.polar_radius)
 
         # self.sampling_radar_bev = BEVSampling(embed_dims, num_frames=num_frames, num_heads=4, num_points=num_points_bev, num_levels=1, pc_range=pc_range, depth_num=bev_depth_num, spatial_shapes=spatial_shapes, temp_radar=False)
-        self.sampling_radar_bev = BEVSampling(embed_dims, num_frames=num_frames, num_heads=4, num_points=num_points_bev, num_levels=1, pc_range=pc_range, depth_num=bev_depth_num, spatial_shapes=spatial_shapes, temp_radar=True)
+        self.sampling_radar_bev = BEVSampling(embed_dims, num_frames=num_frames, num_heads=4, num_points=num_points_bev, num_levels=1, pc_range=pc_range, polar_radius=self.polar_radius, depth_num=bev_depth_num, spatial_shapes=spatial_shapes, temp_radar=True)
         
-        self.sampling_lss_bev = BEVSampling(embed_dims, num_frames=num_frames, num_heads=4, num_points=num_points_bev, num_levels=1, pc_range=pc_range, depth_num=bev_depth_num, spatial_shapes=spatial_shapes)
+        self.sampling_lss_bev = BEVSampling(embed_dims, num_frames=num_frames, num_heads=4, num_points=num_points_bev, num_levels=1, pc_range=pc_range, polar_radius=self.polar_radius, depth_num=bev_depth_num, spatial_shapes=spatial_shapes)
         self.mixing = AdaptiveMixing(in_dim=embed_dims, in_points=num_points * num_frames * img_depth_num, n_groups=4, out_points=128)
         self.ffn = FFN(embed_dims, feedforward_channels=512, ffn_drop=0.1)
 
@@ -345,9 +357,11 @@ class RaCFormerTransformerDecoderLayer(BaseModule):
 
 class ScaleAdaptiveSelfAttention(BaseModule):
     """Scale-adaptive Self Attention"""
-    def __init__(self, embed_dims=256, num_heads=8, dropout=0.1, pc_range=[], init_cfg=None):
+    def __init__(self, embed_dims=256, num_heads=8, dropout=0.1,
+                 pc_range=[], polar_radius=65.0, init_cfg=None):
         super().__init__(init_cfg)
         self.pc_range = pc_range
+        self.polar_radius = float(polar_radius)
 
         self.attention = MultiheadAttention(embed_dims, num_heads, dropout, batch_first=True)
         self.gen_tau = nn.Linear(embed_dims, num_heads)
@@ -362,7 +376,8 @@ class ScaleAdaptiveSelfAttention(BaseModule):
         query_bbox: [B, Q, 10]
         query_feat: [B, Q, C]
         """
-        query_bbox = theta_d2xy_coods(query_bbox, self.pc_range).clone()
+        query_bbox = theta_d2xy_coods(
+            query_bbox, self.pc_range, r=self.polar_radius).clone()
         dist = self.calc_bbox_dists(query_bbox)
         tau = self.gen_tau(query_feat)  # [B, Q, 8]
 
@@ -408,7 +423,7 @@ class RaCFormerSampling(BaseModule):
     """Adaptive Spatio-temporal Sampling"""
     def __init__(self, embed_dims=256, num_frames=4, num_cams=6,
                  num_groups=4, num_points=8, num_levels=4, depth_num=15,
-                 pc_range=[], init_cfg=None):
+                 pc_range=[], polar_radius=65.0, init_cfg=None):
         super().__init__(init_cfg)
 
         self.num_frames = num_frames
@@ -417,6 +432,7 @@ class RaCFormerSampling(BaseModule):
         self.num_groups = num_groups
         self.num_levels = num_levels
         self.pc_range = pc_range
+        self.polar_radius = float(polar_radius)
         self.depth_num = depth_num
 
         self.ray_points_offset = nn.Linear(embed_dims, self.depth_num)
@@ -438,7 +454,8 @@ class RaCFormerSampling(BaseModule):
         B, Q, M = query_ray.shape
         image_h, image_w, _ = img_metas[0]['img_shape'][0]
 
-        query_bbox = theta_d2xy_coods(query_ray, self.pc_range).clone()
+        query_bbox = theta_d2xy_coods(
+            query_ray, self.pc_range, r=self.polar_radius).clone()
 
         # sampling offset of all frames
         sampling_offset = self.sampling_offset(query_feat)
@@ -462,7 +479,8 @@ class RaCFormerSampling(BaseModule):
         sampling_points[..., 0:1] = (sampling_points[..., 0:1] - self.pc_range[0]) / (self.pc_range[3] - self.pc_range[0])
         sampling_points[..., 1:2] = (sampling_points[..., 1:2] - self.pc_range[1]) / (self.pc_range[4] - self.pc_range[1])
         
-        sampling_points = xy2theta_d_coods(sampling_points, self.pc_range)
+        sampling_points = xy2theta_d_coods(
+            sampling_points, self.pc_range, r=self.polar_radius)
         sampling_points = sampling_points.reshape(B, Q, self.num_frames, self.num_groups, self.num_points, self.depth_num, 3)
         if torch.is_tensor(d_region):
             depth_grid = torch.linspace(
@@ -482,7 +500,8 @@ class RaCFormerSampling(BaseModule):
         sampling_points = torch.cat((sampling_points[..., 0:1], sampling_points[..., 1:2]+sampling_points_d, sampling_points[..., 2:]), dim=-1)
         sampling_points = sampling_points.reshape(B, Q, self.num_frames, self.num_groups, self.num_points*self.depth_num, 3) 
 
-        sampling_points = theta_d2xy_coods(sampling_points, self.pc_range)
+        sampling_points = theta_d2xy_coods(
+            sampling_points, self.pc_range, r=self.polar_radius)
         sampling_points[..., 0:1] = sampling_points[..., 0:1] * (self.pc_range[3] - self.pc_range[0]) + self.pc_range[0]
         sampling_points[..., 1:2] = sampling_points[..., 1:2] * (self.pc_range[4] - self.pc_range[1]) + self.pc_range[1]       
         if getattr(self, '_deploy_trt_sampling_barriers', False):
@@ -526,6 +545,7 @@ class BEVSampling(BaseModule):
                      num_heads=4, 
                      num_levels=4, 
                      pc_range=[],                 
+                     polar_radius=65.0,
                      spatial_shapes=(128, 128),
                      depth_num=30,
                      temp_radar=False,
@@ -538,6 +558,7 @@ class BEVSampling(BaseModule):
         self.num_levels = num_levels
         self.embed_dims = embed_dims
         self.pc_range = pc_range
+        self.polar_radius = float(polar_radius)
         self.depth_num = depth_num
         self.spatial_shapes = tuple(spatial_shapes)
 
@@ -606,7 +627,8 @@ class BEVSampling(BaseModule):
         else:
             bev_h, bev_w = bev_feats.shape[-2:]
 
-        query_bbox = theta_d2xy_coods(query_ray, self.pc_range).clone()
+        query_bbox = theta_d2xy_coods(
+            query_ray, self.pc_range, r=self.polar_radius).clone()
 
         # sampling offset of all frames
         sampling_offset = self.sampling_offset(query_feat)
@@ -629,7 +651,8 @@ class BEVSampling(BaseModule):
         sampling_points[..., 1:2] = (sampling_points[..., 1:2] - self.pc_range[1]) / (self.pc_range[4] - self.pc_range[1])
         
         sampling_points = xy2theta_d_coods(
-            sampling_points, self.pc_range, preserve_extra=False)
+            sampling_points, self.pc_range, r=self.polar_radius,
+            preserve_extra=False)
         
         sampling_points = sampling_points.reshape(B, Q, self.num_frames, self.num_heads, self.num_points, self.depth_num, 2)
         depth_grid_cache = getattr(self, '_deploy_depth_grid_cache', None)
@@ -661,7 +684,8 @@ class BEVSampling(BaseModule):
         sampling_points = sampling_points.reshape(B, Q, self.num_frames, self.num_heads, self.num_points*self.depth_num, 2)
 
         sampling_points = theta_d2xy_coods(
-            sampling_points, self.pc_range, preserve_extra=False)
+            sampling_points, self.pc_range, r=self.polar_radius,
+            preserve_extra=False)
         if getattr(self, '_deploy_trt_sampling_barriers', False):
             sampling_points = tensorrt_fusion_barrier(sampling_points)
                 
