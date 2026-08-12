@@ -157,7 +157,7 @@ def append_comparison_details(lines, name, actual, reference, atol):
     ])
 
 
-def decode_detections(cls_scores, bbox_preds):
+def decode_detections(cls_scores, bbox_preds, center_range=None):
     """NumPy equivalent of the company-front NMSFreeCoder."""
     cls_scores = cls_scores[-1, 0]
     bbox_preds = bbox_preds[-1, 0]
@@ -181,8 +181,13 @@ def decode_detections(cls_scores, bbox_preds):
         selected[:, 8:9],
         selected[:, 9:10],
     ], axis=-1)
-    center_range = np.asarray(
-        [0.0, -20.0, -3.0, 200.0, 20.0, 3.0], dtype=boxes.dtype)
+    if center_range is None:
+        center_range = [0.0, -20.0, -3.0, 200.0, 20.0, 3.0]
+    center_range = np.asarray(center_range, dtype=boxes.dtype)
+    if center_range.shape != (6,):
+        raise ValueError(
+            'detection center range must contain 6 values, got {}'.format(
+                center_range.shape))
     mask = np.all(boxes[:, :3] >= center_range[:3], axis=1)
     mask &= np.all(boxes[:, :3] <= center_range[3:], axis=1)
     mask &= scores > 0.05
@@ -338,11 +343,15 @@ def main():
                 'skipped: True',
             ])
         else:
+            center_range = (
+                fixture['decoder_pc_range']
+                if 'decoder_pc_range' in fixture else None)
             actual_decoded = decode_detections(
                 actual_outputs['all_cls_scores'],
-                actual_outputs['all_bbox_preds'])
+                actual_outputs['all_bbox_preds'], center_range)
             reference_decoded = decode_detections(
-                fixture['all_cls_scores'], fixture['all_bbox_preds'])
+                fixture['all_cls_scores'], fixture['all_bbox_preds'],
+                center_range)
             actual_boxes, actual_scores, actual_labels = actual_decoded
             ref_boxes, ref_scores, ref_labels = reference_decoded
             boxes_match = \
