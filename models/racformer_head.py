@@ -40,8 +40,6 @@ class RaCFormer_head(DETRHead):
 
         self.num_clusters = num_clusters
         self.query_init_mode = query_init_mode
-        if self.num_query % self.num_clusters != 0:
-            raise ValueError('num_query must be divisible by num_clusters')
         if query_distance_power < 1.0:
             raise ValueError('query_distance_power must be >= 1.0')
         self.query_distance_power = float(query_distance_power)
