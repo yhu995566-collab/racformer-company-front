@@ -3,7 +3,9 @@
 Last updated: 2026-08-13
 
 This document records a clean, offline-friendly deployment of the four-frame,
-300-query RaCFormer TensorRT split pipeline to a Jetson Orin Nano 16GB.
+300-query RaCFormer TensorRT split pipeline to a Jetson Orin Nano. The current
+target was inventoried as an 8GB-class device (`free -h` reports 7.3 GiB), not
+the previously assumed 16GB device.
 
 The transfer route is always:
 
@@ -318,7 +320,7 @@ python3 -m deploy.tensorrt.build_engine \
   --engine "$TRT/racformer_100m_q300_f4_frontend_image_lss_trt852_fp16_orin.engine" \
   --plugin "$PLUGIN" \
   --fp16 \
-  --workspace-gb 6 \
+  --workspace-gb 2 \
   --out "$TRT/build_100m_q300_f4_frontend_image_lss_trt852_fp16_orin.txt"
 ```
 
@@ -327,7 +329,7 @@ python3 -m deploy.tensorrt.build_engine \
   --onnx "$ONNX/racformer_100m_q300_f4_frontend_radar_trt85.onnx" \
   --engine "$TRT/racformer_100m_q300_f4_frontend_radar_trt852_fp32_orin.engine" \
   --plugin "$PLUGIN" \
-  --workspace-gb 6 \
+  --workspace-gb 2 \
   --out "$TRT/build_100m_q300_f4_frontend_radar_trt852_fp32_orin.txt"
 ```
 
@@ -336,7 +338,7 @@ python3 -m deploy.tensorrt.build_engine \
   --onnx "$ONNX/racformer_100m_q300_f4_decoder_precompute_v2_trt85.onnx" \
   --engine "$TRT/racformer_100m_q300_f4_decoder_precompute_v2_trt852_fp32_orin.engine" \
   --plugin "$PLUGIN" \
-  --workspace-gb 6 \
+  --workspace-gb 2 \
   --out "$TRT/build_100m_q300_f4_decoder_precompute_v2_trt852_fp32_orin.txt"
 ```
 
