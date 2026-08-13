@@ -49,7 +49,7 @@ Server repository:
 Local workstation repository:
 
 ```text
-/home/yanhao/projects/RaCFormer
+the path returned by: git rev-parse --show-toplevel
 ```
 
 Nano repository:
@@ -116,15 +116,18 @@ plugin `.so`.
 
 ## 5. Prepare The Local Transfer Bundle
 
-Run on the local workstation. Replace `SERVER_HOST` and `NANO_HOST` with the
-actual SSH names or addresses.
+Run on the local workstation from its own RaCFormer checkout. Do not reuse a
+path copied from another machine. Replace `SERVER_IP` and `NANO_IP` with
+addresses reachable from the local workstation.
 
 ```bash
-cd /home/yanhao/projects/RaCFormer
+cd /actual/local/path/to/RaCFormer
+LOCAL_REPO="$(git rev-parse --show-toplevel)"
+cd "$LOCAL_REPO"
 git status --short
 git rev-parse HEAD
 
-TRANSFER_DIR=/home/yanhao/projects/RaCFormer/nano_transfer/100m_q300_f4
+TRANSFER_DIR="$LOCAL_REPO/nano_transfer/100m_q300_f4"
 mkdir -p "$TRANSFER_DIR"
 
 git archive \
@@ -138,9 +141,9 @@ cd "$TRANSFER_DIR"
 sha256sum racformer_code_bb4dc27_or_later.tar.gz \
   > racformer_code_bb4dc27_or_later.tar.gz.sha256
 
-scp ubuntu@SERVER_HOST:~/racformer_100m_q300_f4_onnx_fixture_reports.tar.gz \
+scp ubuntu@SERVER_IP:/home/ubuntu/racformer_100m_q300_f4_onnx_fixture_reports.tar.gz \
   "$TRANSFER_DIR/"
-scp ubuntu@SERVER_HOST:~/racformer_100m_q300_f4_onnx_fixture_reports.tar.gz.sha256 \
+scp ubuntu@SERVER_IP:/home/ubuntu/racformer_100m_q300_f4_onnx_fixture_reports.tar.gz.sha256 \
   "$TRANSFER_DIR/"
 
 sha256sum -c racformer_code_bb4dc27_or_later.tar.gz.sha256
@@ -156,7 +159,7 @@ sent to the Nano.
 Copy the bundle to the Nano:
 
 ```bash
-cd /home/yanhao/projects/RaCFormer/nano_transfer/100m_q300_f4
+cd "$TRANSFER_DIR"
 
 scp \
   racformer_code_bb4dc27_or_later.tar.gz \
@@ -164,7 +167,7 @@ scp \
   GIT_COMMIT.txt \
   racformer_100m_q300_f4_onnx_fixture_reports.tar.gz \
   racformer_100m_q300_f4_onnx_fixture_reports.tar.gz.sha256 \
-  cttest@NANO_HOST:/home/cttest/
+  cttest@NANO_IP:/home/cttest/
 ```
 
 ## 6. Nano Environment Inventory Before Installing Anything
@@ -429,10 +432,11 @@ sensor synchronization, result serialization, or end-to-end application I/O.
 Run on the local workstation after validation:
 
 ```bash
-RESULT_DIR=/home/yanhao/projects/RaCFormer/nano_results/100m_q300_f4
+LOCAL_REPO="$(git rev-parse --show-toplevel)"
+RESULT_DIR="$LOCAL_REPO/nano_results/100m_q300_f4"
 mkdir -p "$RESULT_DIR"
 
-scp 'cttest@NANO_HOST:/home/cttest/RaCFormer/outputs/deploy_tensorrt_100m_q300_f4/*.txt' \
+scp 'cttest@NANO_IP:/home/cttest/RaCFormer/outputs/deploy_tensorrt_100m_q300_f4/*.txt' \
   "$RESULT_DIR/"
 ```
 
