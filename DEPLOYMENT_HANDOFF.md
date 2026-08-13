@@ -1,6 +1,11 @@
 # RaCFormer TensorRT Deployment Handoff
 
-Last updated: 2026-08-05
+Last updated: 2026-08-13
+
+The clean offline transfer, environment inventory, aarch64 plugin build,
+three-engine construction, validation, benchmarking, and result-repatriation
+procedure for the four-frame 100m-q300 artifact family is recorded in
+`deploy/NANO_100M_Q300_F4_FROM_SCRATCH.md`.
 
 ## 1. Objective
 
