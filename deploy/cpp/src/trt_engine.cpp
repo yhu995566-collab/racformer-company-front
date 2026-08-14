@@ -2,6 +2,7 @@
 
 #include <fstream>
 #include <iostream>
+#include <algorithm>
 #include <stdexcept>
 
 namespace racformer {
@@ -112,7 +113,10 @@ void TrtEngine::download(const std::string& name, void* destination, size_t size
 }
 
 bool TrtEngine::has(const std::string& name) const {
-    return engine_->getTensorIOMode(name.c_str()) != nvinfer1::TensorIOMode::kNONE;
+    // TensorRT 8.5 logs an internal error when getTensorIOMode() is called
+    // with an unknown name. Consult the enumerated I/O list first so probing
+    // another split engine remains silent.
+    return std::find(names_.begin(), names_.end(), name) != names_.end();
 }
 bool TrtEngine::is_input(const std::string& name) const {
     return engine_->getTensorIOMode(name.c_str()) == nvinfer1::TensorIOMode::kINPUT;
