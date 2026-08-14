@@ -70,6 +70,20 @@ ownership. The demo's calibration matrix is the currently audited static
 radar-to-ego matrix; production code should pass the versioned calibration
 owned by the system instead of copying that sample blindly.
 
+The demo also accepts a recorded `replay_export` root containing
+`images/cam_1/NNNNNNN.jpg` and `radar_ply/NNNNNNN.ply`:
+
+```bash
+racformer_offline_demo IMAGE.engine RADAR.engine DECODER.engine PLUGIN.so \
+  manifest.tsv --sequence /path/to/replay_export 0 4 100000000
+```
+
+The last value is the frame period in nanoseconds. The current replay
+`sync_index.csv` contains indices but no timestamps, so this must be replaced
+with the capture system's real period before treating temporal output as a
+parity result. The demo uses `export_index` as the callback `frame_id`; source
+`radar_frame_id` is diagnostic only because synchronized exports can repeat it.
+
 ## Required parity gates
 
 Before live integration, compare one recorded frame sequence against the Python
