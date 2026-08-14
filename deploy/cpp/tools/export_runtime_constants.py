@@ -16,7 +16,6 @@ REQUIRED = (
     'query_feat',
     'decoder_d_regions',
     'decoder_pc_range',
-    'decoder_polar_radius',
 )
 SUPPORTED_DTYPES = {
     np.dtype('float32'): 'float32',
@@ -46,8 +45,17 @@ def main():
         missing = [name for name in REQUIRED if name not in fixture]
         if missing:
             raise KeyError('fixture is missing constants: {}'.format(missing))
-        for name in REQUIRED:
-            array = np.ascontiguousarray(fixture[name])
+        arrays = {name: fixture[name] for name in REQUIRED}
+        # Older, already-validated 100m/q300 fixtures predate this metadata
+        # field. That checkpoint was explicitly trained/exported with the
+        # legacy 65m polar decoder radius, matching the Python validator's
+        # compatibility fallback.
+        arrays['decoder_polar_radius'] = (
+            fixture['decoder_polar_radius']
+            if 'decoder_polar_radius' in fixture
+            else np.asarray(65.0, dtype=np.float32))
+        for name, source in arrays.items():
+            array = np.ascontiguousarray(source)
             dtype = SUPPORTED_DTYPES.get(array.dtype)
             if dtype is None:
                 raise TypeError('{} uses unsupported dtype {}'.format(
