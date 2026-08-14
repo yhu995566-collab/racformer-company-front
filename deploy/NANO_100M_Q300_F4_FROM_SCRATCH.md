@@ -429,7 +429,22 @@ This measures engine execution with preloaded fixture inputs. It does not yet
 measure JPG decoding, PLY parsing, four-frame buffering, host preprocessing,
 sensor synchronization, result serialization, or end-to-end application I/O.
 
-## 12. Copy Nano Results Back Through Local
+## 12. C++ Live Sensor Runtime
+
+The initial Python-free integration is implemented under `deploy/cpp/`. Its C
+ABI accepts the camera and radar structs supplied by the software team, treats
+timestamps as nanoseconds, deep-copies both callback buffers, pairs them by
+`frame_id`, and schedules inference on a separate worker. It reproduces the
+four-frame, three-engine, six-decoder-pass path and returns decoded boxes,
+scores, and labels through a callback.
+
+Before building it, export the learned initial query and fixed geometry from
+the exact validated fixture. The resulting directory, all three Nano engines,
+and the Nano-built plugin are one indivisible runtime artifact set. Full ABI,
+build, calibration, ownership, velocity-compensation, and parity details are
+in [`cpp/README.md`](cpp/README.md).
+
+## 13. Copy Nano Results Back Through Local
 
 Run on the local workstation after validation:
 
