@@ -195,9 +195,19 @@ class CachedImageFrontend(nn.Module):
                 img_shape=[image_shape])]
             radar_bev = self.model.extract_pts_feat(
                 radar_points=radar_points[index])
+            if radar_depth.dim() == 4:
+                frame_radar_depth = radar_depth[:, index:index + 1]
+                frame_radar_rcs = radar_rcs[:, index:index + 1]
+            elif radar_depth.dim() == 5:
+                frame_radar_depth = radar_depth[:, :, index]
+                frame_radar_rcs = radar_rcs[:, :, index]
+            else:
+                raise ValueError(
+                    'expected radar maps with 4 or 5 dimensions, got {}'.format(
+                        radar_depth.dim()))
             lss_bev, _ = self.model.img_lss_view_transformer(
                 cached_image_lss[:, index:index + 1],
-                radar_depth[:, :, index], radar_rcs[:, :, index],
+                frame_radar_depth, frame_radar_rcs,
                 frame_meta, mlp_input[:, index:index + 1])
             if self.model.pre_process:
                 lss_bev = self.model.pre_process_net(lss_bev)[0]
