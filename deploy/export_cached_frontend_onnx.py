@@ -438,6 +438,7 @@ def main():
                 CACHED_IMAGE_FEATURE_NAMES, cached_features)
         }
         arrays['image_frame'] = single_frame_input.detach().cpu().numpy()
+        arrays['image'] = model_inputs[0].detach().cpu().numpy()
         arrays.update({
             name: tensor.detach().cpu().numpy()
             for name, tensor in zip(
