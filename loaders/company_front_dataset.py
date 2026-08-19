@@ -272,6 +272,86 @@ class CompanyFrontDataset(Custom3DDataset):
             num_gt=num_gt, num_predictions=len(detections),
             threshold_tp=threshold_tp, threshold_fp=threshold_fp)
 
+    def _evaluate_class_threshold_range(self, predictions, ground_truth,
+                                        class_id, iou_fn, iou_threshold,
+                                        score_threshold, min_distance,
+                                        max_distance):
+        """Evaluate threshold counts after global matching.
+
+        AP is still computed by matching detections and GT inside each range.
+        For precision/recall counts, matching inside disjoint range buckets can
+        double-penalize near-boundary localization errors. This method first
+        performs normal whole-ROI matching, then attributes recall by matched
+        GT x-position and precision/FP by prediction x-position.
+        """
+        gt_by_frame = {}
+        gt_x_by_frame = {}
+        num_gt = 0
+        for frame_id, (boxes, labels) in enumerate(ground_truth):
+            class_mask = labels == class_id
+            class_boxes = boxes[class_mask]
+            gt_by_frame[frame_id] = class_boxes
+            if len(class_boxes) == 0:
+                gt_x_by_frame[frame_id] = np.zeros((0,), dtype=np.float32)
+                continue
+            gt_x = class_boxes.gravity_center[:, 0].detach().cpu().numpy()
+            gt_x_by_frame[frame_id] = gt_x
+            num_gt += int(((gt_x >= min_distance) &
+                           (gt_x < max_distance)).sum())
+
+        detections = []
+        overlaps_by_frame = {}
+        pred_x_by_frame = {}
+        for frame_id, (boxes, scores, labels) in enumerate(predictions):
+            indices = np.flatnonzero(labels == class_id)
+            class_boxes = boxes[indices.tolist()]
+            overlaps_by_frame[frame_id] = iou_fn(
+                class_boxes, gt_by_frame[frame_id]).numpy()
+            if len(class_boxes) == 0:
+                pred_x_by_frame[frame_id] = np.zeros((0,), dtype=np.float32)
+            else:
+                pred_x_by_frame[frame_id] = \
+                    class_boxes.gravity_center[:, 0].detach().cpu().numpy()
+            for local_id, index in enumerate(indices):
+                detections.append((float(scores[index]), frame_id, local_id))
+        detections.sort(key=lambda item: item[0], reverse=True)
+
+        matched = {
+            frame_id: np.zeros(len(boxes), dtype=bool)
+            for frame_id, boxes in gt_by_frame.items()}
+        tp_by_gt_range = 0.0
+        tp_by_pred_range = 0.0
+        fp_by_pred_range = 0.0
+
+        for score, frame_id, local_id in detections:
+            if score < score_threshold:
+                continue
+            pred_x = pred_x_by_frame[frame_id][local_id]
+            pred_in_range = min_distance <= pred_x < max_distance
+            gt_boxes = gt_by_frame[frame_id]
+            if len(gt_boxes) == 0:
+                if pred_in_range:
+                    fp_by_pred_range += 1.0
+                continue
+            overlaps = overlaps_by_frame[frame_id][local_id].copy()
+            overlaps[matched[frame_id]] = -1.0
+            gt_id = int(overlaps.argmax())
+            if overlaps[gt_id] >= iou_threshold:
+                matched[frame_id][gt_id] = True
+                gt_x = gt_x_by_frame[frame_id][gt_id]
+                if min_distance <= gt_x < max_distance:
+                    tp_by_gt_range += 1.0
+                if pred_in_range:
+                    tp_by_pred_range += 1.0
+            elif pred_in_range:
+                fp_by_pred_range += 1.0
+
+        return dict(
+            precision_tp=tp_by_pred_range,
+            recall_tp=tp_by_gt_range,
+            fp=fp_by_pred_range,
+            num_gt=num_gt)
+
     @staticmethod
     def _filter_distance(items, min_distance, max_distance,
                          with_scores):
@@ -346,6 +426,7 @@ class CompanyFrontDataset(Custom3DDataset):
             range_3d_aps = []
             range_tp = 0.0
             range_fp = 0.0
+            range_recall_tp = 0.0
             range_gt = 0
             for class_id, _ in enumerate(self.CLASSES):
                 bev = self._evaluate_class(
@@ -356,11 +437,16 @@ class CompanyFrontDataset(Custom3DDataset):
                     self._iou_3d, iou_3d_threshold, score_threshold)
                 if bev['num_gt'] == 0:
                     continue
+                threshold_counts = self._evaluate_class_threshold_range(
+                    predictions, ground_truth, class_id, self._bev_iou,
+                    bev_iou_threshold, score_threshold, min_distance,
+                    max_distance)
                 range_bev_aps.append(bev['ap'])
                 range_3d_aps.append(iou_3d['ap'])
-                range_tp += bev['threshold_tp']
-                range_fp += bev['threshold_fp']
-                range_gt += bev['num_gt']
+                range_tp += threshold_counts['precision_tp']
+                range_fp += threshold_counts['fp']
+                range_recall_tp += threshold_counts['recall_tp']
+                range_gt += threshold_counts['num_gt']
 
             min_label = f'{min_distance:g}'
             max_label = f'{max_distance:g}'
@@ -372,6 +458,6 @@ class CompanyFrontDataset(Custom3DDataset):
             metrics[f'{prefix}_precision@{score_threshold:g}'] = \
                 range_tp / max(range_tp + range_fp, 1.0)
             metrics[f'{prefix}_recall@{score_threshold:g}'] = \
-                range_tp / max(float(range_gt), 1.0)
+                range_recall_tp / max(float(range_gt), 1.0)
             metrics[f'{prefix}_num_gt'] = range_gt
         return metrics

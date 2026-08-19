@@ -50,6 +50,11 @@ class RaCFormer_head(DETRHead):
 
         super(RaCFormer_head, self).__init__(num_classes, in_channels, train_cfg=train_cfg, test_cfg=test_cfg, **kwargs)
 
+        if self.num_query % self.num_clusters != 0:
+            raise ValueError(
+                'num_query ({}) must be divisible by num_clusters ({})'.
+                format(self.num_query, self.num_clusters))
+
         transformer_radius = float(getattr(
             self.transformer, 'polar_radius', 65.0))
         if not math.isclose(
