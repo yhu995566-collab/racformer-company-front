@@ -45,6 +45,9 @@ class Runtime {
     void* user_data_{};
     TensorMap constants_;
     Preprocessor preprocessor_;
+    std::array<float, 6> point_cloud_range_{};
+    float polar_radius_{};
+    uint32_t max_detections_{300};
     TrtLogger logger_;
     void* plugin_handle_{};
     std::unique_ptr<TrtEngine> image_, radar_, decoder_;

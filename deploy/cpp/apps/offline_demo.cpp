@@ -81,7 +81,10 @@ void on_result(const racformer_result_t* result, void* opaque) {
     auto* state = static_cast<CallbackState*>(opaque);
     std::cout << "frame=" << result->frame_id << " detections="
               << result->detection_count << " engine_ms="
-              << result->inference_ms << '\n';
+              << result->inference_ms << " preprocess_ms="
+              << result->preprocessing_ms << " postprocess_ms="
+              << result->postprocessing_ms << " end_to_end_ms="
+              << result->end_to_end_ms << '\n';
     for (uint32_t i = 0; i < result->detection_count; ++i) {
         const auto& box = result->boxes_3d[i];
         std::cout << i << " label=" << result->labels_3d[i]

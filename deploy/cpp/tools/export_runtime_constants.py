@@ -30,6 +30,13 @@ def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--fixture', required=True)
     parser.add_argument('--out-dir', required=True)
+    parser.add_argument(
+        '--voxel-size', type=float, nargs=3,
+        default=(0.5, 0.5, 6.0), metavar=('X', 'Y', 'Z'))
+    parser.add_argument(
+        '--depth-range', type=float, nargs=2, metavar=('MIN', 'MAX'),
+        help='Radar projection depth range. Defaults to [1, x_max + 5].')
+    parser.add_argument('--max-detections', type=int, default=300)
     return parser.parse_args()
 
 
@@ -54,6 +61,31 @@ def main():
             fixture['decoder_polar_radius']
             if 'decoder_polar_radius' in fixture
             else np.asarray(65.0, dtype=np.float32))
+        pc_range = np.asarray(arrays['decoder_pc_range'], dtype=np.float32)
+        if pc_range.shape != (6,):
+            raise ValueError('decoder_pc_range must have shape (6,)')
+        if args.max_detections <= 0:
+            raise ValueError('--max-detections must be positive')
+        depth_range = (
+            args.depth_range if args.depth_range is not None
+            else (1.0, float(pc_range[3]) + 5.0))
+        if not 0.0 <= depth_range[0] < depth_range[1]:
+            raise ValueError('--depth-range must satisfy 0 <= MIN < MAX')
+        radar_voxels = (
+            fixture['radar_voxels_0']
+            if 'radar_voxels_0' in fixture else None)
+        if radar_voxels is None or radar_voxels.ndim < 1:
+            raise KeyError('fixture is missing radar_voxels_0 capacity metadata')
+        arrays.update({
+            'runtime_voxel_size': np.asarray(
+                args.voxel_size, dtype=np.float32),
+            'runtime_depth_range': np.asarray(
+                depth_range, dtype=np.float32),
+            'runtime_static_radar_voxels': np.asarray(
+                radar_voxels.shape[0], dtype=np.int32),
+            'runtime_max_detections': np.asarray(
+                args.max_detections, dtype=np.int32),
+        })
         for name, source in arrays.items():
             array = np.ascontiguousarray(source)
             dtype = SUPPORTED_DTYPES.get(array.dtype)

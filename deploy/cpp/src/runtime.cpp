@@ -31,12 +31,52 @@ const Tensor& choose(const TensorMap& dynamic, const TensorMap& constants,
     if (fixed != constants.end()) return fixed->second;
     throw std::runtime_error("no runtime or constant input named " + name);
 }
+
+template <std::size_t Size>
+std::array<float, Size> float_array(
+        const TensorMap& constants, const char* name) {
+    const auto found = constants.find(name);
+    if (found == constants.end() || found->second.dtype != DataType::kFloat32 ||
+        found->second.element_count() != Size) {
+        throw std::runtime_error(std::string("constants must contain float32 ") +
+                                 name + " with " + std::to_string(Size) +
+                                 " elements");
+    }
+    std::array<float, Size> result{};
+    std::memcpy(result.data(), found->second.bytes.data(), sizeof(result));
+    return result;
+}
+
+uint32_t positive_int_scalar(
+        const TensorMap& constants, const char* name, uint32_t fallback) {
+    const auto found = constants.find(name);
+    if (found == constants.end()) return fallback;
+    if (found->second.dtype != DataType::kInt32 ||
+        found->second.element_count() != 1) {
+        throw std::runtime_error(std::string("constants must contain int32 scalar ") + name);
+    }
+    int32_t value{};
+    std::memcpy(&value, found->second.bytes.data(), sizeof(value));
+    if (value <= 0) throw std::runtime_error(std::string(name) + " must be positive");
+    return static_cast<uint32_t>(value);
+}
+
+float elapsed_ms(
+        std::chrono::steady_clock::time_point begin,
+        std::chrono::steady_clock::time_point end) {
+    return std::chrono::duration<float, std::milli>(end - begin).count();
+}
 }  // namespace
 
 Runtime::Runtime(RuntimeConfig config, racformer_result_callback_t callback, void* user_data)
     : config_(std::move(config)), callback_(callback), user_data_(user_data),
       constants_(load_tensor_manifest(config_.manifest)),
       preprocessor_(config_.radar_to_ego, constants_) {
+    point_cloud_range_ = float_array<6>(constants_, "decoder_pc_range");
+    const auto radius = float_array<1>(constants_, "decoder_polar_radius");
+    polar_radius_ = radius[0];
+    max_detections_ = positive_int_scalar(
+        constants_, "runtime_max_detections", 300);
     plugin_handle_ = dlopen(config_.plugin.c_str(), RTLD_NOW | RTLD_GLOBAL);
     if (!plugin_handle_) throw std::runtime_error(std::string("plugin load failed: ") + dlerror());
     if (!initLibNvInferPlugins(&logger_, "")) throw std::runtime_error("initLibNvInferPlugins failed");
@@ -153,7 +193,9 @@ void Runtime::worker() {
 }
 
 void Runtime::infer(const PairedFrameWindow& frames) {
+    const auto total_start = std::chrono::steady_clock::now();
     TensorMap dynamic = preprocessor_.prepare(frames);
+    const auto preprocessing_end = std::chrono::steady_clock::now();
     TensorMap available = merged_inputs(dynamic);
     if (!configured_) {
         image_->configure(available);
@@ -232,40 +274,53 @@ void Runtime::infer(const PairedFrameWindow& frames) {
     cuda_check(cudaEventElapsedTime(&inference_ms, start, end), "cudaEventElapsedTime");
     cudaEventDestroy(start); cudaEventDestroy(end);
 
+    const auto postprocessing_start = std::chrono::steady_clock::now();
     struct Candidate { float score; int query; int label; };
+    const auto cls_shape = decoder_->shape("cls_score");
+    if (cls_shape.empty() || cls_shape.back() <= 0)
+        throw std::runtime_error("decoder cls_score has invalid shape");
+    const int num_classes = static_cast<int>(cls_shape.back());
     std::vector<Candidate> candidates;
     candidates.reserve(cls.size());
     for (size_t i = 0; i < cls.size(); ++i)
-        candidates.push_back({1.0F / (1.0F + std::exp(-cls[i])), static_cast<int>(i / 10), static_cast<int>(i % 10)});
-    const size_t top = std::min<size_t>(300, candidates.size());
+        candidates.push_back({1.0F / (1.0F + std::exp(-cls[i])),
+                              static_cast<int>(i / num_classes),
+                              static_cast<int>(i % num_classes)});
+    const size_t top = std::min<size_t>(max_detections_, candidates.size());
     std::partial_sort(candidates.begin(), candidates.begin() + top, candidates.end(),
                       [](const Candidate& a, const Candidate& b) { return a.score > b.score; });
     std::vector<racformer_box3d_t> boxes;
     std::vector<float> scores;
     std::vector<int32_t> labels;
-    const float polar_radius = [&] {
-        const auto it = constants_.find("decoder_polar_radius");
-        return it == constants_.end() ? 65.0F : *reinterpret_cast<const float*>(it->second.bytes.data());
-    }();
     for (size_t i = 0; i < top; ++i) {
         const Candidate& candidate = candidates[i];
         if (candidate.score <= 0.05F) continue;
         const float* b = raw_bbox.data() + candidate.query * 10;
         const float theta = b[0] * kTwoPi;
-        const float x = std::clamp(b[1] * polar_radius * std::cos(theta), 0.0F, 100.0F);
-        const float y = std::clamp(b[1] * polar_radius * std::sin(theta), -20.0F, 20.0F);
-        const float z_center = b[2] * 6.0F - 3.0F;
+        const float x = b[1] * polar_radius_ * std::cos(theta);
+        const float y = b[1] * polar_radius_ * std::sin(theta);
+        const float z_center = b[2] *
+            (point_cloud_range_[5] - point_cloud_range_[2]) +
+            point_cloud_range_[2];
         const float dz = std::exp(b[5]);
-        if (z_center < -3.0F || z_center > 3.0F) continue;
+        if (x < point_cloud_range_[0] || x > point_cloud_range_[3] ||
+            y < point_cloud_range_[1] || y > point_cloud_range_[4] ||
+            z_center < point_cloud_range_[2] ||
+            z_center > point_cloud_range_[5]) continue;
         boxes.push_back({x, y, z_center - dz * 0.5F, std::exp(b[3]), std::exp(b[4]), dz,
                          std::atan2(b[6], b[7]), b[8], b[9]});
         scores.push_back(candidate.score);
         labels.push_back(candidate.label);
     }
+    const auto postprocessing_end = std::chrono::steady_clock::now();
     if (callback_) {
         racformer_result_t result{frames[0]->camera.timestamp, frames[0]->radar.timestamp,
             frames[0]->camera.frame_id, frames[0]->camera.version,
-            static_cast<uint32_t>(boxes.size()), boxes.data(), scores.data(), labels.data(), inference_ms};
+            static_cast<uint32_t>(boxes.size()), boxes.data(), scores.data(), labels.data(),
+            inference_ms,
+            elapsed_ms(total_start, preprocessing_end),
+            elapsed_ms(postprocessing_start, postprocessing_end),
+            elapsed_ms(total_start, postprocessing_end)};
         callback_(&result, user_data_);
     }
 }

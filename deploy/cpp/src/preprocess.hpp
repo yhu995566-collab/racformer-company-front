@@ -46,6 +46,12 @@ class Preprocessor {
 
     std::array<float, 16> radar_to_ego_{};
     std::array<float, 64> lidar2img_{};
+    std::array<float, 6> point_cloud_range_{};
+    std::array<float, 3> voxel_size_{};
+    std::array<float, 2> depth_range_{};
+    int radar_slots_{};
+    int bev_width_{};
+    int bev_height_{};
 };
 
 }  // namespace racformer

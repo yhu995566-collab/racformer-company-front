@@ -53,7 +53,10 @@ typedef struct {
     const racformer_box3d_t* boxes_3d;
     const float* scores_3d;
     const int32_t* labels_3d;
-    float inference_ms;
+    float inference_ms;    /* TensorRT engines only, retained for ABI compatibility. */
+    float preprocessing_ms;
+    float postprocessing_ms;
+    float end_to_end_ms;
 } racformer_result_t;
 
 typedef void (*racformer_result_callback_t)(

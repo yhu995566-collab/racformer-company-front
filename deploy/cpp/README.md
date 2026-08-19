@@ -1,7 +1,9 @@
 # RaCFormer C++ sensor runtime
 
-This directory is the Python-free runtime for the 100 m / 300-query / four-frame
-deployment. It consumes two callbacks from different producer threads, pairs
+This directory is the Python-free runtime for the company-front four-frame
+deployments. Runtime geometry (including the 50 m / 200-query contract) is
+loaded from exported fixture constants rather than compiled into the library.
+It consumes two callbacks from different producer threads, pairs
 them by `frame_id`, keeps four paired frames in a fixed-capacity ring, and runs the image/LSS,
 radar, and six-pass recurrent decoder TensorRT engines on one worker thread.
 
@@ -52,8 +54,11 @@ the three engines:
 
 ```bash
 python3 deploy/cpp/tools/export_runtime_constants.py \
-  --fixture outputs/deploy_onnx_100m_q300_f4/racformer_100m_q300_f4_frontend_precompute_sample0.npz \
-  --out-dir outputs/deploy_runtime_100m_q300_f4/constants
+  --fixture outputs/deploy_onnx_50m_q200_f4/racformer_50m_q200_f4_frontend_sample0.npz \
+  --voxel-size 0.5 0.5 6.0 \
+  --depth-range 1.0 55.0 \
+  --max-detections 300 \
+  --out-dir outputs/deploy_runtime_50m_q200_f4/constants
 ```
 
 Transfer the complete constants directory to Nano and verify it with
