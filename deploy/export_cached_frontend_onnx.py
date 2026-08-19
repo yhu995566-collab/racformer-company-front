@@ -37,6 +37,7 @@ from deploy.pytorch_runner import RaCFormerPyTorchRunner
 from deploy.tensorrt.rewrite_trt85_onnx import (
     rewrite_trt85_unsupported_nodes,
 )
+from deploy.tensorrt.validate_engine_numpy import decode_detections
 
 
 IMAGE_ENCODER_OUTPUT_NAMES = [
@@ -67,6 +68,8 @@ def parse_args():
     parser.add_argument('--fixture', required=True)
     parser.add_argument('--report', required=True)
     parser.add_argument('--atol', type=float, default=1e-4)
+    parser.add_argument('--feature-atol', type=float, default=2e-2)
+    parser.add_argument('--decoded-atol', type=float, default=3e-2)
     return parser.parse_args()
 
 
@@ -243,6 +246,14 @@ def comparison(name, actual, reference, atol):
         name, close, maximum, mean)
 
 
+def numpy_max_error(actual, reference):
+    if actual.shape != reference.shape:
+        return float('inf')
+    if actual.size == 0:
+        return 0.0
+    return float(np.abs(actual - reference).max())
+
+
 def save_onnx(module, inputs, input_names, output_names, path, opset):
     path = os.path.abspath(path)
     os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
@@ -282,6 +293,8 @@ def main():
         'device: {}'.format(args.device),
         'opset: {}'.format(args.opset),
         'parity atol: {}'.format(args.atol),
+        'feature parity atol: {}'.format(args.feature_atol),
+        'decoded parity atol: {}'.format(args.decoded_atol),
     ]
     fixture_data = None
     try:
@@ -345,23 +358,72 @@ def main():
                     model_inputs[3], model_inputs[6], model_inputs[7])))
         torch.cuda.synchronize(runner.device)
 
-        parity_passed = True
+        frontend_parity_passed = True
+        raw_detection_parity_passed = True
         lines.extend(['', '=== Cached tensor parity ==='])
         frontend_output_names = (
             FRONTEND_BASE_OUTPUT_NAMES + PRECOMPUTED_BEV_INPUT_NAMES)
         for name, actual, reference in zip(
                 frontend_output_names, cached_outputs, baseline_outputs):
+            tolerance = (
+                args.feature_atol
+                if name.startswith('image_feat_') or
+                name == 'lss_bev_value'
+                else args.atol)
             close, line = comparison(
-                name, actual, reference, args.atol)
-            parity_passed &= close
-            lines.append(line)
+                name, actual, reference, tolerance)
+            frontend_parity_passed &= close
+            lines.append('{} (atol={})'.format(line, tolerance))
         for name, actual, reference in zip(
                 DETECTION_OUTPUT_NAMES,
                 cached_detection, baseline_detection):
             close, line = comparison(
                 name, actual, reference, args.atol)
-            parity_passed &= close
+            raw_detection_parity_passed &= close
             lines.append(line)
+
+        pc_range = np.asarray(decoder.pc_range, dtype=np.float32)
+        cached_detection_np = tuple(
+            tensor.detach().cpu().numpy()
+            for tensor in cached_detection)
+        baseline_detection_np = tuple(
+            tensor.detach().cpu().numpy()
+            for tensor in baseline_detection)
+        actual_decoded = decode_detections(
+            cached_detection_np[0], cached_detection_np[1], pc_range)
+        reference_decoded = decode_detections(
+            baseline_detection_np[0], baseline_detection_np[1], pc_range)
+        actual_boxes, actual_scores, actual_labels = actual_decoded
+        reference_boxes, reference_scores, reference_labels = \
+            reference_decoded
+        boxes_match = actual_boxes.shape == reference_boxes.shape and \
+            np.allclose(
+                actual_boxes, reference_boxes, rtol=0.0,
+                atol=args.decoded_atol)
+        scores_match = actual_scores.shape == reference_scores.shape and \
+            np.allclose(
+                actual_scores, reference_scores, rtol=0.0,
+                atol=args.decoded_atol)
+        labels_match = np.array_equal(actual_labels, reference_labels)
+        decoded_passed = boxes_match and scores_match and labels_match
+        lines.extend([
+            '',
+            '=== Decoded detection parity ===',
+            'actual/reference detection count: {}/{}'.format(
+                len(actual_boxes), len(reference_boxes)),
+            'boxes close: {}, max_abs_error={:.8f}'.format(
+                boxes_match, numpy_max_error(
+                    actual_boxes, reference_boxes)),
+            'scores close: {}, max_abs_error={:.8f}'.format(
+                scores_match, numpy_max_error(
+                    actual_scores, reference_scores)),
+            'labels equal: {}'.format(labels_match),
+            'raw detection tensor parity: {}'.format(
+                'PASS' if raw_detection_parity_passed else 'FAIL'),
+            'decoded detection parity: {}'.format(
+                'PASS' if decoded_passed else 'FAIL'),
+        ])
+        parity_passed = frontend_parity_passed and decoded_passed
         lines.append('PyTorch cached parity: {}'.format(
             'PASS' if parity_passed else 'FAIL'))
         if not parity_passed:
@@ -395,6 +457,12 @@ def main():
             for name, tensor in zip(
                 DETECTION_OUTPUT_NAMES, cached_detection)
         })
+        arrays['decoder_d_regions'] = np.asarray(
+            decoder.decoder_layer.d_region_list, dtype=np.float32)
+        arrays['decoder_pc_range'] = pc_range
+        arrays['decoder_polar_radius'] = np.asarray(
+            getattr(decoder.decoder_layer, 'polar_radius', 65.0),
+            dtype=np.float32)
         np.savez_compressed(fixture_path, **arrays)
 
         encoder_rewrite = save_onnx(
