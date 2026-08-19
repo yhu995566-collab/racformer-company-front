@@ -3,6 +3,7 @@
 #include "preprocess.hpp"
 #include "racformer/c_api.h"
 #include "tensor_store.hpp"
+#include "temporal_ring.hpp"
 #include "trt_engine.hpp"
 
 #include <condition_variable>
@@ -35,7 +36,7 @@ class Runtime {
  private:
     void pair_locked(uint32_t frame_id);
     void worker();
-    void infer(const std::vector<PairedFrame>& frames);
+    void infer(const PairedFrameWindow& frames);
     TensorMap merged_inputs(const TensorMap& dynamic) const;
     std::vector<int64_t> tensor_shape(const Tensor& tensor) const { return tensor.shape; }
 
@@ -59,7 +60,7 @@ class Runtime {
     std::map<uint32_t, CameraCopy> cameras_;
     std::map<uint32_t, RadarCopy> radars_;
     std::deque<PairedFrame> queue_;
-    std::vector<PairedFrame> history_;
+    TemporalRing<PairedFrame, kTemporalFrameCount> history_;
     std::thread worker_;
     std::string error_;
 };

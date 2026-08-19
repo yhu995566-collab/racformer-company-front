@@ -125,6 +125,7 @@ TensorMap Runtime::merged_inputs(const TensorMap& dynamic) const {
 void Runtime::worker() {
     for (;;) {
         PairedFrame frame;
+        PairedFrameWindow snapshot{};
         {
             std::unique_lock<std::mutex> lock(mutex_);
             condition_.wait(lock, [&] { return stopping_ || !queue_.empty(); });
@@ -132,24 +133,17 @@ void Runtime::worker() {
             frame = std::move(queue_.front());
             queue_.pop_front();
             if (!history_.empty() &&
-                (frame.camera.timestamp < history_.front().camera.timestamp ||
-                 frame.radar.timestamp < history_.front().radar.timestamp)) {
+                (frame.camera.timestamp < history_.newest().camera.timestamp ||
+                 frame.radar.timestamp < history_.newest().radar.timestamp)) {
                 error_ = "out-of-order paired frame dropped: " + std::to_string(frame.camera.frame_id);
                 continue;
             }
-            history_.insert(history_.begin(), std::move(frame));
-            if (history_.size() > 4) history_.resize(4);
+            history_.push(std::move(frame));
+            if (history_.size() < kTemporalFrameCount &&
+                !config_.pad_startup_frames) continue;
+            snapshot = history_.padded_window();
         }
         try {
-            std::vector<PairedFrame> snapshot;
-            {
-                std::lock_guard<std::mutex> lock(mutex_);
-                snapshot = history_;
-            }
-            if (snapshot.size() < 4) {
-                if (!config_.pad_startup_frames) continue;
-                snapshot.resize(4, snapshot.back());
-            }
             infer(snapshot);
         } catch (const std::exception& exception) {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -158,7 +152,7 @@ void Runtime::worker() {
     }
 }
 
-void Runtime::infer(const std::vector<PairedFrame>& frames) {
+void Runtime::infer(const PairedFrameWindow& frames) {
     TensorMap dynamic = preprocessor_.prepare(frames);
     TensorMap available = merged_inputs(dynamic);
     if (!configured_) {
@@ -269,8 +263,8 @@ void Runtime::infer(const std::vector<PairedFrame>& frames) {
         labels.push_back(candidate.label);
     }
     if (callback_) {
-        racformer_result_t result{frames[0].camera.timestamp, frames[0].radar.timestamp,
-            frames[0].camera.frame_id, frames[0].camera.version,
+        racformer_result_t result{frames[0]->camera.timestamp, frames[0]->radar.timestamp,
+            frames[0]->camera.frame_id, frames[0]->camera.version,
             static_cast<uint32_t>(boxes.size()), boxes.data(), scores.data(), labels.data(), inference_ms};
         callback_(&result, user_data_);
     }

@@ -12,7 +12,7 @@
 
 namespace racformer {
 namespace {
-constexpr int kFrames = 4;
+constexpr int kFrames = static_cast<int>(kTemporalFrameCount);
 constexpr int kSourceWidth = 640;
 constexpr int kSourceHeight = 480;
 constexpr int kImageWidth = 640;
@@ -184,8 +184,10 @@ void Preprocessor::voxelize(const std::vector<Point>& points, Tensor* voxels,
     }
 }
 
-TensorMap Preprocessor::prepare(const std::vector<PairedFrame>& frames) const {
-    if (frames.size() != kFrames) throw std::runtime_error("preprocessor requires four newest-first frames");
+TensorMap Preprocessor::prepare(const PairedFrameWindow& frames) const {
+    for (const auto& frame : frames) {
+        if (!frame) throw std::runtime_error("preprocessor received an empty temporal frame");
+    }
     TensorMap output;
     output["image"] = make_uint8_tensor({1, kFrames, 3, kImageHeight, kImageWidth});
     output["radar_depth"] = make_float_tensor({1, kFrames, kImageHeight, kImageWidth});
@@ -193,14 +195,14 @@ TensorMap Preprocessor::prepare(const std::vector<PairedFrame>& frames) const {
     output["time_diff"] = make_float_tensor({1, kFrames});
     output["velocity_time_diff"] = make_float_tensor({1, 1, 1});
     float* time_diff = data<float>(output["time_diff"]);
-    const uint64_t newest_radar = frames.front().radar.timestamp;
-    const uint64_t newest_image = frames.front().camera.timestamp;
+    const uint64_t newest_radar = frames.front()->radar.timestamp;
+    const uint64_t newest_image = frames.front()->camera.timestamp;
     const size_t image_frame_bytes = 3ULL * kImageHeight * kImageWidth;
     const size_t map_frame_elements = kImageHeight * kImageWidth;
     for (int index = 0; index < kFrames; ++index) {
-        const auto image = decode_and_crop(frames[index].camera);
+        const auto image = decode_and_crop(frames[index]->camera);
         std::memcpy(output["image"].bytes.data() + index * image_frame_bytes, image.data(), image.size());
-        const auto points = transform_points(frames[index].radar, newest_radar);
+        const auto points = transform_points(frames[index]->radar, newest_radar);
         make_maps(points, lidar2img_.data() + index * 16,
                   data<float>(output["radar_depth"]) + index * map_frame_elements,
                   data<float>(output["radar_rcs"]) + index * map_frame_elements);
@@ -211,7 +213,7 @@ TensorMap Preprocessor::prepare(const std::vector<PairedFrame>& frames) const {
         output["radar_coors_" + std::to_string(index)] = std::move(coordinates);
         time_diff[index] = static_cast<float>(
             (static_cast<double>(newest_image) -
-             static_cast<double>(frames[index].camera.timestamp)) * 1e-9);
+             static_cast<double>(frames[index]->camera.timestamp)) * 1e-9);
     }
     data<float>(output["velocity_time_diff"])[0] = time_diff[1] < 1e-5F ? 1.0F : time_diff[1];
     return output;

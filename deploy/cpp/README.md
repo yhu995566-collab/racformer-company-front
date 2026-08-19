@@ -2,8 +2,13 @@
 
 This directory is the Python-free runtime for the 100 m / 300-query / four-frame
 deployment. It consumes two callbacks from different producer threads, pairs
-them by `frame_id`, keeps four paired frames newest-first, and runs the image/LSS,
+them by `frame_id`, keeps four paired frames in a fixed-capacity ring, and runs the image/LSS,
 radar, and six-pass recurrent decoder TensorRT engines on one worker thread.
+
+Temporal snapshots use shared ownership. Advancing or resetting the ring does
+not copy the previous four JPEG/radar payloads and cannot invalidate a window
+already held by the inference worker. This is an input-history optimization;
+the current engines still recompute all four frames' frontend features.
 
 ## ABI contract
 

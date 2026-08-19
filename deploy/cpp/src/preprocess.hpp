@@ -4,7 +4,9 @@
 #include "tensor_store.hpp"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace racformer {
@@ -22,12 +24,15 @@ struct RadarCopy {
     std::vector<radar_raw_data_t> points;
 };
 struct PairedFrame { CameraCopy camera; RadarCopy radar; };
+constexpr std::size_t kTemporalFrameCount = 4;
+using PairedFrameWindow = std::array<
+    std::shared_ptr<const PairedFrame>, kTemporalFrameCount>;
 
 class Preprocessor {
  public:
     Preprocessor(const std::array<float, 16>& radar_to_ego,
                  const TensorMap& constants);
-    TensorMap prepare(const std::vector<PairedFrame>& newest_first) const;
+    TensorMap prepare(const PairedFrameWindow& newest_first) const;
 
  private:
     struct Point { float x, y, z, rcs, vx, vy, lag; };

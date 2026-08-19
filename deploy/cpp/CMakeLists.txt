@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.16)
 project(racformer_runtime LANGUAGES CXX)
 
+include(CTest)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
@@ -42,6 +44,13 @@ target_compile_options(racformer_runtime PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(racformer_offline_demo apps/offline_demo.cpp)
 target_link_libraries(racformer_offline_demo PRIVATE racformer_runtime Threads::Threads)
+
+if(BUILD_TESTING)
+    add_executable(temporal_ring_test tests/temporal_ring_test.cpp)
+    target_include_directories(temporal_ring_test PRIVATE src)
+    target_compile_options(temporal_ring_test PRIVATE -Wall -Wextra -Wpedantic)
+    add_test(NAME temporal_ring_test COMMAND temporal_ring_test)
+endif()
 
 install(TARGETS racformer_runtime racformer_offline_demo
     LIBRARY DESTINATION lib RUNTIME DESTINATION bin)
