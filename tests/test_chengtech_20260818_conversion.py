@@ -9,14 +9,20 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def load_converter():
-    path = ROOT / "tools" / "convert_chengtech_20260818.py"
+def load_module(name, relative_path):
+    path = ROOT / relative_path
     spec = importlib.util.spec_from_file_location(
-        "convert_chengtech_20260818", path)
+        name, path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def load_converter():
+    return load_module(
+        "convert_chengtech_20260818",
+        "tools/convert_chengtech_20260818.py")
 
 
 def literal_lzf(data):
@@ -57,6 +63,17 @@ def test_binary_compressed_pcd_preserves_all_declared_types(tmp_path):
     for name, expected in fields.items():
         assert actual[name].dtype == expected.dtype
         assert np.array_equal(actual[name], expected)
+
+
+def test_projected_pixel_rounding_stays_inside_image_bounds():
+    audit = load_module(
+        "audit_chengtech_20260818",
+        "tools/audit_chengtech_20260818.py")
+    image = np.zeros((2, 2, 3), dtype=np.uint8)
+    points = np.asarray([[1.9999, 1.9999, 1.0, 0.0, 0.0]])
+    rendered, count = audit.project_lidar(image, points, np.eye(4), 10)
+    assert count == 1
+    assert rendered.shape == image.shape
 
 
 def test_company_gt_mapping_uses_center_dimensions_and_ground_velocity():

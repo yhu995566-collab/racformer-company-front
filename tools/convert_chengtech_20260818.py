@@ -378,11 +378,26 @@ def convert_lidar(frame: Frame, out_root: Path) -> Tuple[Path, Dict]:
     output = out_root / "lidar" / (frame.sample_id + ".npy")
     output.parent.mkdir(parents=True, exist_ok=True)
     np.save(output, output_points)
-    timestamp_seconds = fields["timestamp"] / 1e9
+    timestamp_raw = fields["timestamp"]
+    frame_seconds = frame.timestamp_us / 1e6
+    raw_median = float(np.median(timestamp_raw))
+    if abs(raw_median - frame_seconds) <= 2.0:
+        timestamp_unit = "seconds"
+        timestamp_seconds = timestamp_raw
+    elif abs(raw_median / 1e9 - frame_seconds) <= 2.0:
+        timestamp_unit = "nanoseconds"
+        timestamp_seconds = timestamp_raw / 1e9
+    else:
+        raise ValueError(
+            "{} point timestamps match neither seconds nor nanoseconds "
+            "relative to GT stamp_sec".format(frame.lidar_path))
     audit = {
         "points": count,
         "ring_min": int(fields["ring"].min()),
         "ring_max": int(fields["ring"].max()),
+        "timestamp_detected_unit": timestamp_unit,
+        "timestamp_raw_min": float(timestamp_raw.min()),
+        "timestamp_raw_max": float(timestamp_raw.max()),
         "timestamp_sec_min": float(timestamp_seconds.min()),
         "timestamp_sec_max": float(timestamp_seconds.max()),
         "intensity_min": float(fields["intensity"].min()),

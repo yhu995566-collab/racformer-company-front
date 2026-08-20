@@ -56,6 +56,8 @@ def project_lidar(image, points, projection, maximum):
     # NumPy indexing is much faster than tens of thousands of cv2.circle calls.
     order = np.argsort(depth)[::-1]
     pixels = np.rint(uv[order]).astype(np.int32)
+    pixels[:, 0] = np.clip(pixels[:, 0], 0, width - 1)
+    pixels[:, 1] = np.clip(pixels[:, 1], 0, height - 1)
     color_values = np.rint(
         255.0 * (1.0 - np.clip(depth[order] / 350.0, 0.0, 1.0))
     ).astype(np.uint8)
