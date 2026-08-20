@@ -1,10 +1,13 @@
+import os
+
 _base_ = ['./3dh_query_company_front_350m_f4.py']
 
 # Synchronized ChengTech capture from 2026-08-18. Images are undistorted
 # offline at their native 1920x1080 resolution before this augmentation.
-dataset_root = (
+dataset_root = os.path.abspath(os.environ.get(
+    'RACFORMER_COMPANY_PROCESSED_ROOT',
     '/mnt/diskNvme1/DataSet/radar_camera_GT/'
-    '2026-08-18-16-01-30/processed_racformer/')
+    '2026-08-18-16-01-30/processed_racformer')) + '/'
 
 num_frames = 4
 num_cams = 1
