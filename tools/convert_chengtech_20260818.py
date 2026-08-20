@@ -222,8 +222,9 @@ def read_binary_compressed_pcd(path: Path) -> Dict[str, np.ndarray]:
     return result
 
 
-def read_ply_vertices(path: Path) -> Tuple[np.ndarray, List[str]]:
+def read_ply_vertices(path: Path) -> Tuple[np.ndarray, List[str], Dict[str, str]]:
     properties: List[Tuple[str, str]] = []
+    comments: Dict[str, str] = {}
     vertex_count = 0
     with path.open("rb") as stream:
         if stream.readline().decode("ascii").strip() != "ply":
@@ -232,6 +233,10 @@ def read_ply_vertices(path: Path) -> Tuple[np.ndarray, List[str]]:
             line = stream.readline().decode("ascii").strip()
             if line.startswith("format ") and line.split()[1] != "ascii":
                 raise ValueError("only ASCII radar PLY is supported")
+            if line.startswith("comment "):
+                parts = line.split(maxsplit=2)
+                if len(parts) == 3:
+                    comments[parts[1]] = parts[2]
             if line.startswith("element vertex "):
                 vertex_count = int(line.split()[2])
             elif line.startswith("property "):
@@ -242,7 +247,32 @@ def read_ply_vertices(path: Path) -> Tuple[np.ndarray, List[str]]:
         data = np.loadtxt(stream, max_rows=vertex_count, dtype=np.float64)
     if data.ndim == 1:
         data = data.reshape(1, -1)
-    return data, [name for _, name in properties]
+    return data, [name for _, name in properties], comments
+
+
+def aligned_radar_timestamp_us(comments: Dict[str, str],
+                               gt_timestamp_us: int) -> Tuple[int, Dict]:
+    """Apply the PLY sync offset; both radar header values are microseconds."""
+    try:
+        raw_timestamp_us = int(comments["rspTimestamp"])
+        sync_difference_us = int(comments["syncTimediff"])
+    except (KeyError, ValueError) as error:
+        raise ValueError(
+            "radar PLY requires integer rspTimestamp and syncTimediff comments"
+        ) from error
+    aligned_timestamp_us = raw_timestamp_us + sync_difference_us
+    difference_us = aligned_timestamp_us - gt_timestamp_us
+    if abs(difference_us) > 250000:
+        raise ValueError(
+            "aligned radar timestamp differs from GT by {:.3f} ms".format(
+                difference_us / 1000.0))
+    return aligned_timestamp_us, {
+        "radar_timestamp_unit": "microseconds",
+        "radar_raw_timestamp_us": raw_timestamp_us,
+        "radar_sync_difference_us": sync_difference_us,
+        "radar_aligned_timestamp_us": aligned_timestamp_us,
+        "radar_to_gt_difference_ms": difference_us / 1000.0,
+    }
 
 
 def _field(points: np.ndarray, names: Sequence[str],
@@ -498,7 +528,10 @@ def main() -> None:
         image = prepare_image(
             frame, out_root, args.jpeg_quality, args.skip_undistort)
         lidar, lidar_audit = convert_lidar(frame, out_root)
-        radar_raw, radar_names = read_ply_vertices(frame.radar_path)
+        radar_raw, radar_names, radar_comments = read_ply_vertices(
+            frame.radar_path)
+        radar_timestamp_us, radar_audit = aligned_radar_timestamp_us(
+            radar_comments, frame.timestamp_us)
         radar = convert_radar(radar_raw, radar_names, frame.car_twist)
         radar_path = out_root / "radar" / (frame.sample_id + ".npy")
         radar_path.parent.mkdir(parents=True, exist_ok=True)
@@ -508,6 +541,7 @@ def main() -> None:
             "image": image,
             "lidar": lidar,
             "radar": radar_path.resolve(),
+            "radar_timestamp_us": radar_timestamp_us,
             "boxes": boxes,
             "names": names,
             "velocities": velocities,
@@ -517,6 +551,7 @@ def main() -> None:
             "frame": frame.index,
             "lidar": lidar_audit,
             "radar_points": int(len(radar)),
+            **radar_audit,
             "gt_boxes": int(len(boxes)),
             "class_counts": dict(Counter(names.tolist())),
             "gt_source_0": int(np.count_nonzero(sources == 0)),
@@ -545,7 +580,7 @@ def main() -> None:
                     previous.timestamp_us, current_to_previous),
                 "RADAR_FRONT": {
                     "data_path": relative_path(previous_item["radar"], out_root),
-                    "timestamp": int(previous.timestamp_us),
+                    "timestamp": int(previous_item["radar_timestamp_us"]),
                     "radar_in_ego": bool(np.allclose(
                         previous_to_current, np.eye(4), atol=1e-6)),
                     "radar2ego": previous_to_current.astype(np.float32),
@@ -566,7 +601,7 @@ def main() -> None:
             "cams": {"CAM_FRONT": current_camera},
             "rads": {"RADAR_FRONT": {
                 "data_path": relative_path(item["radar"], out_root),
-                "timestamp": int(frame.timestamp_us),
+                "timestamp": int(item["radar_timestamp_us"]),
                 "radar_in_ego": True,
                 "radar2ego": np.eye(4, dtype=np.float32),
             }},

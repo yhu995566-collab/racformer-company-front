@@ -132,6 +132,17 @@ def test_radar_stationary_forward_point_is_zero_after_host_compensation():
     assert converted[0, 3] == 5.0
 
 
+def test_radar_microsecond_timestamp_applies_sync_difference():
+    converter = load_converter()
+    timestamp, audit = converter.aligned_radar_timestamp_us({
+        "rspTimestamp": "1758238003300083",
+        "syncTimediff": "28802088411108",
+    }, gt_timestamp_us=1787040091710000)
+    assert timestamp == 1787040091711191
+    assert audit["radar_timestamp_unit"] == "microseconds"
+    assert np.isclose(audit["radar_to_gt_difference_ms"], 1.191)
+
+
 def test_company_q_configs_keep_the_five_query_layouts():
     expected = {
         1: (900, 30, 30, 1.0),
