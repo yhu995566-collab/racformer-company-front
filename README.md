@@ -1,9 +1,3 @@
-> **3DH-Query experiment fork.** This directory is a RaCFormer code copy for
-> staged long-range radar-guided Gaussian-prior experiments. Stage 1 is an
-> analysis-only candidate-recall study; see
-> `tools/analysis/README_stage1_candidate_recall.md`. The original RaCFormer
-> model and training paths below remain unchanged.
-
 <div align="center">
 <h1>RaCFormer: Towards High-Quality 3D Object Detection via Query-based Radar-Camera Fusion (CVPR 2025)</h1>
 
