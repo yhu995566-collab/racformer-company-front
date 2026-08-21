@@ -42,6 +42,11 @@ cd "$REPO_ROOT"
 
 export RACFORMER_COMPANY_PROCESSED_ROOT="$PROCESSED_ROOT"
 export CUDA_VISIBLE_DEVICES="$GPU_IDS"
+# The first four-GPU attempt timed out in DDP's initial parameter broadcast.
+# Prefer reliable single-node shared-memory/PCIe transport on this server.
+export NCCL_P2P_DISABLE=${NCCL_P2P_DISABLE:-1}
+export NCCL_IB_DISABLE=${NCCL_IB_DISABLE:-1}
+export NCCL_DEBUG=${NCCL_DEBUG:-WARN}
 
 TRAIN_INFO="$PROCESSED_ROOT/custom_infos_train_sweep.pkl"
 VAL_INFO="$PROCESSED_ROOT/custom_infos_val_sweep.pkl"
@@ -62,7 +67,36 @@ if pgrep -af 'train.py --config configs/3dh_query_company_20260818_q[1-5].py' \
     exit 4
 fi
 
-log_queue "preflight passed; GPUs=$GPU_IDS; processed_root=$PROCESSED_ROOT"
+log_queue "file preflight passed; GPUs=$GPU_IDS; processed_root=$PROCESSED_ROOT"
+log_queue "NCCL transport: P2P_DISABLE=$NCCL_P2P_DISABLE IB_DISABLE=$NCCL_IB_DISABLE"
+
+if torchrun --nproc_per_node=4 --master_port=29798 \
+        tools/test_nccl_collectives.py > "$RUN_DIR/nccl_test.log" 2>&1; then
+    log_queue "four-GPU NCCL collective test passed"
+    touch "$RUN_DIR/NCCL_TEST_DONE"
+else
+    status=$?
+    log_queue "four-GPU NCCL collective test failed with exit code $status"
+    touch "$RUN_DIR/NCCL_TEST_FAILED"
+    exit "$status"
+fi
+
+log_queue "starting one-epoch four-GPU Q1 smoke test"
+if torchrun \
+        --nproc_per_node=4 \
+        --master_port=29799 \
+        train.py \
+        --config configs/3dh_query_company_20260818_q1.py \
+        --override batch_size=1 total_epochs=1 eval_config.interval=1 \
+        > "$RUN_DIR/q1_four_gpu_smoke.log" 2>&1; then
+    log_queue "one-epoch four-GPU Q1 smoke test passed"
+    touch "$RUN_DIR/Q1_FOUR_GPU_SMOKE_DONE"
+else
+    status=$?
+    log_queue "one-epoch four-GPU Q1 smoke test failed with exit code $status"
+    touch "$RUN_DIR/Q1_FOUR_GPU_SMOKE_FAILED"
+    exit "$status"
+fi
 
 for q in 1 2 3 4 5; do
     port=$((29800 + q))
