@@ -59,6 +59,7 @@ class RadarCandidateScorer(nn.Module):
         time_scale: float = 1.0,
         field_indices: Optional[Dict[str, int]] = None,
         dropout: float = 0.0,
+        max_center_offset: float = 20.0,
     ) -> None:
         super().__init__()
         if len(point_cloud_range) != 6:
@@ -69,6 +70,8 @@ class RadarCandidateScorer(nn.Module):
             raise ValueError("MLP dimensions must be positive")
         if min(rcs_scale, velocity_scale, time_scale) <= 0:
             raise ValueError("feature scales must be positive")
+        if max_center_offset <= 0:
+            raise ValueError("max_center_offset must be positive")
 
         fields = dict(self.DEFAULT_FIELDS)
         if field_indices is not None:
@@ -83,6 +86,7 @@ class RadarCandidateScorer(nn.Module):
         self.rcs_scale = float(rcs_scale)
         self.velocity_scale = float(velocity_scale)
         self.time_scale = float(time_scale)
+        self.max_center_offset = float(max_center_offset)
         self.field_indices = fields
         self.required_dim = max(fields.values()) + 1
 
@@ -103,8 +107,13 @@ class RadarCandidateScorer(nn.Module):
             nn.GELU(),
         )
         self.score_head = nn.Linear(embedding_dim, 1)
+        self.offset_head = nn.Linear(embedding_dim, 2)
         # Start with a conservative ~0.1 objectness probability.
         nn.init.constant_(self.score_head.bias, -2.1972246)
+        # A fresh scorer starts at the measured radar position.  The bounded
+        # residual is learned only where GT association supplies supervision.
+        nn.init.zeros_(self.offset_head.weight)
+        nn.init.zeros_(self.offset_head.bias)
 
     def _pad_points(
         self, points: PointBatch, valid_mask: Optional[Tensor]
@@ -236,6 +245,9 @@ class RadarCandidateScorer(nn.Module):
         features = self.build_features(padded_points)
         embeddings = self.feature_encoder(features)
         logits = self.score_head(embeddings).squeeze(-1)
+        center_offsets = self.max_center_offset * torch.tanh(
+            self.offset_head(embeddings)
+        )
 
         # Invalid candidates cannot enter top-K.  There is deliberately no
         # hand-crafted ranking term here: valid ordering is 100% learned.
@@ -254,9 +266,14 @@ class RadarCandidateScorer(nn.Module):
         )
         topk_points = torch.gather(padded_points, 1, point_index)
         topk_embeddings = torch.gather(embeddings, 1, feature_index)
+        offset_index = topk_indices.unsqueeze(-1).expand(-1, -1, 2)
+        topk_center_offsets = torch.gather(center_offsets, 1, offset_index)
         topk_points = topk_points * topk_mask.unsqueeze(-1).to(topk_points.dtype)
         topk_embeddings = topk_embeddings * topk_mask.unsqueeze(-1).to(
             topk_embeddings.dtype
+        )
+        topk_center_offsets = topk_center_offsets * topk_mask.unsqueeze(-1).to(
+            topk_center_offsets.dtype
         )
         topk_scores = topk_scores.masked_fill(~topk_mask, 0.0)
 
@@ -266,12 +283,103 @@ class RadarCandidateScorer(nn.Module):
             "candidate_mask": candidate_mask,
             "candidate_embeddings": embeddings,
             "objectness_logits": logits,
+            "center_offsets": center_offsets,
             "topk_indices": topk_indices,
             "topk_mask": topk_mask,
             "topk_scores": topk_scores,
             "topk_points": topk_points,
             "topk_embeddings": topk_embeddings,
+            "topk_center_offsets": topk_center_offsets,
         }
+
+
+@torch.no_grad()
+def build_box_candidate_targets(
+    candidate_points: Tensor,
+    candidate_mask: Tensor,
+    gt_boxes: Sequence[Tensor],
+    target_sigma: float = 2.0,
+) -> Dict[str, Tensor]:
+    """Associate radar points with oriented BEV boxes.
+
+    Company boxes use ``[x, y, z, length, width, height, yaw]`` with yaw
+    measured from vehicle +X toward +Y.  Objectness is one inside a box and
+    decays with Euclidean distance to its oriented rectangle.  Centre-offset
+    supervision still points to the geometric box centre, allowing returns on
+    a vehicle surface to become useful Gaussian centres.
+    """
+    if target_sigma <= 0:
+        raise ValueError("target_sigma must be positive")
+    if candidate_points.dim() != 3 or candidate_mask.shape != candidate_points.shape[:2]:
+        raise ValueError("candidate tensors must have shapes [B,N,D] and [B,N]")
+    if len(gt_boxes) != candidate_points.shape[0]:
+        raise ValueError("gt_boxes length must equal batch size")
+
+    batch_size, num_candidates = candidate_mask.shape
+    device, dtype = candidate_points.device, candidate_points.dtype
+    targets = torch.zeros((batch_size, num_candidates), device=device, dtype=dtype)
+    offsets = torch.zeros((batch_size, num_candidates, 2), device=device, dtype=dtype)
+    distances = torch.full(
+        (batch_size, num_candidates), float("inf"), device=device, dtype=dtype
+    )
+    matched_indices = torch.full(
+        (batch_size, num_candidates), -1, device=device, dtype=torch.long
+    )
+
+    for batch_index, boxes in enumerate(gt_boxes):
+        if boxes.numel() == 0:
+            continue
+        boxes = boxes.to(device=device, dtype=dtype).reshape(-1, 7)
+        candidate_xy = candidate_points[batch_index, :, :2]
+        delta = candidate_xy[:, None, :] - boxes[None, :, :2]
+        yaw = boxes[:, 6]
+        cos_yaw, sin_yaw = torch.cos(yaw), torch.sin(yaw)
+        local_x = delta[..., 0] * cos_yaw + delta[..., 1] * sin_yaw
+        local_y = -delta[..., 0] * sin_yaw + delta[..., 1] * cos_yaw
+        outside_x = (local_x.abs() - boxes[:, 3] * 0.5).clamp_min(0.0)
+        outside_y = (local_y.abs() - boxes[:, 4] * 0.5).clamp_min(0.0)
+        box_distance = torch.sqrt(outside_x.square() + outside_y.square())
+        nearest_distance, nearest_index = box_distance.min(dim=1)
+        nearest_center = boxes[nearest_index, :2]
+        valid = candidate_mask[batch_index]
+        distances[batch_index, valid] = nearest_distance[valid]
+        matched_indices[batch_index, valid] = nearest_index[valid]
+        offsets[batch_index, valid] = nearest_center[valid] - candidate_xy[valid]
+        targets[batch_index, valid] = torch.exp(
+            -0.5 * (nearest_distance[valid] / target_sigma).square()
+        )
+    return {
+        "objectness_targets": targets,
+        "center_offsets": offsets,
+        "nearest_box_distances": distances,
+        "matched_gt_indices": matched_indices,
+    }
+
+
+def candidate_center_offset_loss(
+    predicted_offsets: Tensor,
+    target_offsets: Tensor,
+    objectness_targets: Tensor,
+    candidate_mask: Tensor,
+    min_target: float = 0.5,
+) -> Tensor:
+    """Weighted Smooth-L1 centre regression for target-associated returns."""
+    if predicted_offsets.shape != target_offsets.shape:
+        raise ValueError("predicted and target offsets must have identical shapes")
+    if objectness_targets.shape != candidate_mask.shape:
+        raise ValueError("objectness_targets and candidate_mask must match")
+    if predicted_offsets.shape[:2] != candidate_mask.shape:
+        raise ValueError("offset tensors must begin with [B,N]")
+    if not 0 <= min_target <= 1:
+        raise ValueError("min_target must be in [0,1]")
+    positive = candidate_mask.to(torch.bool) & (objectness_targets >= min_target)
+    if not torch.any(positive):
+        return predicted_offsets.sum() * 0.0
+    loss = F.smooth_l1_loss(
+        predicted_offsets[positive], target_offsets[positive], reduction="none"
+    ).mean(dim=-1)
+    weights = objectness_targets[positive]
+    return (loss * weights).sum() / weights.sum().clamp_min(1e-6)
 
 
 @torch.no_grad()

@@ -25,11 +25,24 @@ time-lag conditioning rather than simply concatenating all radar points.
 
 ## Stage B: learned candidate scoring
 
-`models/gaussian_prior/candidate_scorer.py` already implements the first
-learned component. It consumes `[x,y,z,rcs,vx,vy,time_lag]`, rejects only
-invalid candidates, learns soft objectness from GT distance, and returns a
-fixed Top-K. It must be connected to the current-frame raw radar list passed
-to `RaCFormer_head`; hand-crafted RCS or velocity ranking is not used.
+The company-data learned Top-K experiment is deliberately capped at the
+validated 200m range and leaves all completed 350m Q1-Q5 configs untouched:
+
+```bash
+bash run_code/start_company_radar_topk.sh
+```
+
+`models/gaussian_prior/candidate_scorer.py` consumes four-frame
+`[x,y,z,rcs,vx,vy,time_lag]` points, rejects only invalid candidates, and
+learns class-agnostic objectness, a centre residual, and an embedding. Targets
+use distance to oriented BEV boxes rather than distance to the geometric
+centre, retaining useful surface returns on large vehicles.
+
+Training uses only the train split. Validation compares random, RCS, and
+learned Top-64/128/256 selection against the all-candidate ceiling, before and
+after learned centre correction. Hard Top-K is a fixed-shape compute budget,
+not the final fusion mechanism; Stage C applies soft Gaussian weights to the
+unchanged grid queries.
 
 ## Stage C: Gaussian prior over existing queries
 
@@ -69,6 +82,6 @@ Use a new config namespace and do not modify completed Q1-Q5 configs:
 5. only then test Gaussian context on Q2-Q5 layouts.
 
 Report candidate recall, detector AP/recall by range, added parameters,
-latency, and the learned gate magnitude. The present company validation split
-contains almost no GT beyond 150 metres, so claims about long-range benefit
-require additional far-range GT even if the engineering ablation succeeds.
+latency, and the learned gate magnitude. Company-data Gaussian experiments
+currently report only 0-50m, 50-100m, 100-150m, and 150-200m. No claim is made
+beyond the user-confirmed accurate 200m range.
