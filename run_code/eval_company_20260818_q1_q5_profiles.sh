@@ -6,8 +6,10 @@ GPU=${1:-1}
 DATASET_ROOT=${RACFORMER_COMPANY_PROCESSED_ROOT:-$HOME/hyh/company_20260818/processed_racformer}
 RUN_TAG=$(date +%Y%m%d_%H%M%S)
 RESULT_ROOT=${Q_PROFILE_RESULT_ROOT:-/mnt/diskNvme1/hyh/results/RaCFormer/company_20260818_q1_q5_profiles/$RUN_TAG}
+LATEST_FILE=/mnt/diskNvme1/hyh/results/RaCFormer/company_20260818_q1_q5_profiles/latest_run.txt
 
 mkdir -p "$RESULT_ROOT"
+echo "$RESULT_ROOT" > "$LATEST_FILE"
 cd "$REPO_ROOT"
 
 declare -A RUN_DIRS=(
@@ -53,4 +55,3 @@ grep -hE \
     "$RESULT_ROOT"/q*/eval.log > "$RESULT_ROOT/profile_summary.txt"
 
 echo "Q1-Q5 profile evaluation complete: $RESULT_ROOT"
-echo "$RESULT_ROOT" > /mnt/diskNvme1/hyh/results/RaCFormer/company_20260818_q1_q5_profiles/latest_run.txt
