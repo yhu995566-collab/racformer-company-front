@@ -47,6 +47,8 @@ fi
 
 RUN_DIR=$2
 mkdir -p "$RUN_DIR" "$PROCESSED_ROOT"
+exec 9>"$RUN_ROOT/queue.lock"
+flock -n 9 || fail "another 30k Q5 conversion/training queue holds $RUN_ROOT/queue.lock"
 cd "$REPO_ROOT"
 trap 'status=$?; if (( status != 0 )); then touch "$RUN_DIR/FAILED"; fi' EXIT
 
