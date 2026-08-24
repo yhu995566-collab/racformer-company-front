@@ -369,11 +369,30 @@ class CompanyFrontDataset(Custom3DDataset):
 
     def evaluate(self, results, metric=None, logger=None,
                  bev_iou_threshold=0.5, iou_3d_threshold=0.5,
-                 score_threshold=0.1, nms_iou_threshold=0.2, **kwargs):
+                 score_threshold=0.1, nms_iou_threshold=0.2,
+                 eval_classes=None, metric_prefix='company', **kwargs):
         """Evaluate front-view detections with class-wise BEV and 3D AP."""
         if len(results) != len(self):
             raise ValueError(
                 f'Expected {len(self)} predictions, received {len(results)}')
+        if eval_classes is None:
+            eval_classes = self.CLASSES
+        eval_classes = tuple(eval_classes)
+        if not eval_classes:
+            raise ValueError('eval_classes must contain at least one class')
+        if len(set(eval_classes)) != len(eval_classes):
+            raise ValueError('eval_classes must not contain duplicates')
+        unknown_classes = sorted(set(eval_classes) - set(self.CLASSES))
+        if unknown_classes:
+            raise ValueError(
+                f'Unknown eval_classes {unknown_classes}; available={self.CLASSES}')
+        class_to_id = {
+            class_name: class_id
+            for class_id, class_name in enumerate(self.CLASSES)}
+        selected_classes = [
+            (class_to_id[class_name], class_name)
+            for class_name in eval_classes]
+        metric_prefix = metric_prefix.rstrip('/')
 
         predictions = [
             self._result_fields(result, nms_iou_threshold)
@@ -386,7 +405,7 @@ class CompanyFrontDataset(Custom3DDataset):
         total_fp = 0.0
         total_gt = 0
 
-        for class_id, class_name in enumerate(self.CLASSES):
+        for class_id, class_name in selected_classes:
             bev = self._evaluate_class(
                 predictions, ground_truth, class_id, self._bev_iou,
                 bev_iou_threshold, score_threshold)
@@ -400,22 +419,22 @@ class CompanyFrontDataset(Custom3DDataset):
             total_tp += bev['threshold_tp']
             total_fp += bev['threshold_fp']
             total_gt += bev['num_gt']
-            prefix = f'company/{class_name}'
+            prefix = f'{metric_prefix}/{class_name}'
             metrics[f'{prefix}_BEV_AP@{bev_iou_threshold:g}'] = bev['ap']
             metrics[f'{prefix}_3D_AP@{iou_3d_threshold:g}'] = iou_3d['ap']
             metrics[f'{prefix}_precision@{score_threshold:g}'] = bev['precision']
             metrics[f'{prefix}_recall@{score_threshold:g}'] = bev['recall']
             metrics[f'{prefix}_num_gt'] = bev['num_gt']
 
-        metrics[f'company/BEV_mAP@{bev_iou_threshold:g}'] = \
+        metrics[f'{metric_prefix}/BEV_mAP@{bev_iou_threshold:g}'] = \
             float(np.mean(bev_aps)) if bev_aps else 0.0
-        metrics[f'company/3D_mAP@{iou_3d_threshold:g}'] = \
+        metrics[f'{metric_prefix}/3D_mAP@{iou_3d_threshold:g}'] = \
             float(np.mean(iou_3d_aps)) if iou_3d_aps else 0.0
-        metrics[f'company/overall_precision@{score_threshold:g}'] = \
+        metrics[f'{metric_prefix}/overall_precision@{score_threshold:g}'] = \
             total_tp / max(total_tp + total_fp, 1.0)
-        metrics[f'company/overall_recall@{score_threshold:g}'] = \
+        metrics[f'{metric_prefix}/overall_recall@{score_threshold:g}'] = \
             total_tp / max(float(total_gt), 1.0)
-        metrics['company/total_gt'] = total_gt
+        metrics[f'{metric_prefix}/total_gt'] = total_gt
 
         for min_distance, max_distance in self.evaluation_distance_ranges:
             range_predictions = self._filter_distance(
@@ -428,7 +447,7 @@ class CompanyFrontDataset(Custom3DDataset):
             range_fp = 0.0
             range_recall_tp = 0.0
             range_gt = 0
-            for class_id, _ in enumerate(self.CLASSES):
+            for class_id, _ in selected_classes:
                 bev = self._evaluate_class(
                     range_predictions, range_ground_truth, class_id,
                     self._bev_iou, bev_iou_threshold, score_threshold)
@@ -450,7 +469,7 @@ class CompanyFrontDataset(Custom3DDataset):
 
             min_label = f'{min_distance:g}'
             max_label = f'{max_distance:g}'
-            prefix = f'company/range_{min_label}_{max_label}m'
+            prefix = f'{metric_prefix}/range_{min_label}_{max_label}m'
             metrics[f'{prefix}_BEV_mAP@{bev_iou_threshold:g}'] = \
                 float(np.mean(range_bev_aps)) if range_bev_aps else 0.0
             metrics[f'{prefix}_3D_mAP@{iou_3d_threshold:g}'] = \

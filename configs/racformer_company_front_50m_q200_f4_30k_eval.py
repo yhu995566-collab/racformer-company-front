@@ -75,3 +75,6 @@ data = dict(
 
 evaluation_output_dir = (
     'outputs/racformer_company_front_50m_q200_f4_30k_eval/evaluation/')
+
+# Delivery evaluation always reports these two scopes from one inference run.
+evaluation_profiles = ['car_only', 'main3']

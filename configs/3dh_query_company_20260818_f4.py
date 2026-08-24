@@ -113,3 +113,6 @@ data = dict(
 
 evaluation_output_dir = (
     'outputs/3dh_query_company_20260818/evaluation/')
+
+# Standard comparison scopes for Q ablations and future company evaluations.
+evaluation_profiles = ['car_only', 'main3']

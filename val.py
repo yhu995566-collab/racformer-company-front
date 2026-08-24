@@ -18,6 +18,13 @@ from mmdet3d.models import build_model
 from models.utils import VERSION
 
 
+COMPANY_EVALUATION_PROFILES = {
+    'all': None,
+    'car_only': ('car',),
+    'main3': ('car', 'truck', 'bicycle'),
+}
+
+
 def evaluate(dataset, results, **kwargs):
     metrics = dataset.evaluate(results, **kwargs)
     logging.info('--- Evaluation Results ---')
@@ -42,6 +49,11 @@ def main():
     parser.add_argument('--nms-iou-threshold', type=float, default=0.2)
     parser.add_argument('--bev-iou-threshold', type=float, default=0.5)
     parser.add_argument('--iou-3d-threshold', type=float, default=0.5)
+    parser.add_argument(
+        '--eval-profiles', nargs='+',
+        choices=tuple(COMPANY_EVALUATION_PROFILES),
+        help='Company evaluation profiles. Defaults to evaluation_profiles '
+             'from the config, then all classes.')
     parser.add_argument('--skip-eval', action='store_true')
     parser.add_argument('--override', nargs='+', action=DictAction)
     args = parser.parse_args()
@@ -137,14 +149,26 @@ def main():
             mmcv.dump(results, prediction_out)
             logging.info('Predictions saved to %s', prediction_out)
         if not args.skip_eval:
-            eval_kwargs = {}
             if val_dataset.__class__.__name__ == 'CompanyFrontDataset':
-                eval_kwargs = dict(
-                    score_threshold=args.score_threshold,
-                    nms_iou_threshold=args.nms_iou_threshold,
-                    bev_iou_threshold=args.bev_iou_threshold,
-                    iou_3d_threshold=args.iou_3d_threshold)
-            evaluate(val_dataset, results, **eval_kwargs)
+                profiles = args.eval_profiles
+                if profiles is None:
+                    profiles = cfgs.get('evaluation_profiles', ['all'])
+                for profile in profiles:
+                    logging.info(
+                        '--- Company evaluation profile: %s ---', profile)
+                    metric_prefix = (
+                        'company' if profile == 'all'
+                        else 'company/{}'.format(profile))
+                    evaluate(
+                        val_dataset, results,
+                        score_threshold=args.score_threshold,
+                        nms_iou_threshold=args.nms_iou_threshold,
+                        bev_iou_threshold=args.bev_iou_threshold,
+                        iou_3d_threshold=args.iou_3d_threshold,
+                        eval_classes=COMPANY_EVALUATION_PROFILES[profile],
+                        metric_prefix=metric_prefix)
+            else:
+                evaluate(val_dataset, results)
 
 
 if __name__ == '__main__':
