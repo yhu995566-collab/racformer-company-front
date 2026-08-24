@@ -70,3 +70,23 @@ build/racformer_visualizer/libracformer_visualizer.so
 The software process includes `racformer/visualizer_c_api.h`, links this shared
 library, and sends the returned JPEG to its existing frame display or transport
 path. This library neither opens an HDMI window nor writes files by itself.
+
+## Offline smoke test
+
+The build also produces `racformer_visualizer_smoke_test`. It validates the
+three-trigger matching and complete JPEG render path without TensorRT or a GPU.
+It reads one 640x480 JPEG, one ASCII radar PLY, and the first projection matrix
+from `lidar2img.bin`. A deliberately synthetic car box is used so this test is
+not mistaken for a model-accuracy check.
+
+```bash
+./build/racformer_visualizer/racformer_visualizer_smoke_test \
+  /path/to/images/cam_1/0000000.jpg \
+  /path/to/radar_ply/0000000.ply \
+  /workspace/outputs/deploy_runtime_50m_q200_f4/constants/lidar2img.bin \
+  /workspace/outputs/visualizer_smoke_0000000.jpg
+```
+
+Success requires `status: SUCCESS`, an output size of 640x480, and manual
+inspection of the output JPEG for plausible radar projection. The red car box
+is synthetic; production boxes arrive through `racformer_vis_push_predictions`.

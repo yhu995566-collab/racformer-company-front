@@ -19,6 +19,13 @@ target_link_libraries(racformer_visualizer PRIVATE
 target_compile_options(racformer_visualizer PRIVATE
     -Wall -Wextra -Wpedantic)
 
+add_executable(racformer_visualizer_smoke_test
+    apps/offline_smoke_test.cpp)
+target_link_libraries(racformer_visualizer_smoke_test PRIVATE
+    racformer_visualizer Threads::Threads)
+target_compile_options(racformer_visualizer_smoke_test PRIVATE
+    -Wall -Wextra -Wpedantic)
+
 install(TARGETS racformer_visualizer LIBRARY DESTINATION lib)
 install(FILES include/racformer/visualizer_c_api.h
     DESTINATION include/racformer)
