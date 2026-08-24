@@ -79,3 +79,26 @@ def test_global_result_lidar_is_transformed_to_ego(tmp_path):
     assert np.allclose(points[0, :3], [1.0, 2.0, 3.0])
     assert audit["coordinate_frame"] == "global"
     assert audit["cropped_points"] == 1
+
+
+def test_empty_result_lidar_can_be_audited_without_output(tmp_path):
+    converter = load_collection_converter()
+    fields = {
+        "x": np.asarray([100.0], dtype=np.float32),
+        "y": np.asarray([100.0], dtype=np.float32),
+        "z": np.asarray([100.0], dtype=np.float32),
+        "intensity": np.asarray([7.0], dtype=np.float32),
+    }
+    converter.single.read_binary_compressed_pcd = lambda _: fields
+    frame = type("Frame", (), {
+        "lidar_path": Path("empty.pcd"),
+        "sample_id": "sequence-000001",
+    })()
+    output, audit = converter.convert_result_lidar(
+        frame, tmp_path,
+        (0.0, -10.0, -10.0, 10.0, 10.0, 10.0), "ego",
+        allow_empty=True)
+    assert output is None
+    assert audit["source_points"] == 1
+    assert audit["cropped_points"] == 0
+    assert audit["xyz_min"] is None

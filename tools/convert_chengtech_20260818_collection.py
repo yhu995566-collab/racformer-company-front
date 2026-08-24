@@ -15,7 +15,7 @@ import pickle
 import sys
 from collections import Counter
 from pathlib import Path
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 from tqdm import tqdm
@@ -48,6 +48,11 @@ def parse_args() -> argparse.Namespace:
         "--max-radar-gt-delta-ms", type=float, default=50.0,
         help="Drop keyframes whose temporal window contains a radar/GT "
              "timestamp error above this value")
+    parser.add_argument(
+        "--max-empty-lidar-frames", type=int, default=0,
+        help="Maximum empty-LiDAR keyframes allowed in each sequence after "
+             "coordinate normalization and ROI cropping. Allowed frames are "
+             "audited and omitted; the default remains fail-fast.")
     parser.add_argument(
         "--point-cloud-range", type=float, nargs=6,
         default=(0.0, -20.0, -3.0, 50.0, 20.0, 3.0),
@@ -255,7 +260,9 @@ def roi_mask(points: np.ndarray, point_cloud_range: Sequence[float]) -> np.ndarr
 
 def convert_result_lidar(frame, out_root: Path,
                          point_cloud_range: Sequence[float],
-                         coordinate_frame: str = "ego") -> Tuple[Path, Dict]:
+                         coordinate_frame: str = "ego",
+                         allow_empty: bool = False
+                         ) -> Tuple[Optional[Path], Dict]:
     fields = single.read_binary_compressed_pcd(frame.lidar_path)
     required = {"x", "y", "z", "intensity"}
     if set(fields) != required:
@@ -281,17 +288,7 @@ def convert_result_lidar(frame, out_root: Path,
     model_finite = np.isfinite(points[:, :3]).all(axis=1)
     model_xyz = points[model_finite, :3]
     points = points[roi_mask(points, point_cloud_range)]
-    if not len(points):
-        raise ValueError(
-            "{} has zero LiDAR points in ROI after {}->ego normalization; "
-            "source_xyz_min={}, source_xyz_max={}".format(
-                frame.lidar_path, coordinate_frame,
-                source_xyz.min(axis=0).tolist() if len(source_xyz) else None,
-                source_xyz.max(axis=0).tolist() if len(source_xyz) else None))
-    output = out_root / "lidar" / (frame.sample_id + ".npy")
-    output.parent.mkdir(parents=True, exist_ok=True)
-    np.save(output, points)
-    return output.resolve(), {
+    audit = {
         "source_points": source_count,
         "coordinate_frame": coordinate_frame,
         "cropped_points": len(points),
@@ -307,6 +304,19 @@ def convert_result_lidar(frame, out_root: Path,
         "xyz_min": points[:, :3].min(axis=0).tolist() if len(points) else None,
         "xyz_max": points[:, :3].max(axis=0).tolist() if len(points) else None,
     }
+    if not len(points) and not allow_empty:
+        raise ValueError(
+            "{} has zero LiDAR points in ROI after {}->ego normalization; "
+            "source_xyz_min={}, source_xyz_max={}".format(
+                frame.lidar_path, coordinate_frame,
+                source_xyz.min(axis=0).tolist() if len(source_xyz) else None,
+                source_xyz.max(axis=0).tolist() if len(source_xyz) else None))
+    if not len(points):
+        return None, audit
+    output = out_root / "lidar" / (frame.sample_id + ".npy")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    np.save(output, points)
+    return output.resolve(), audit
 
 
 def convert_sequence(frames: Sequence, out_root: Path, args,
@@ -315,11 +325,24 @@ def convert_sequence(frames: Sequence, out_root: Path, args,
     class_counts = Counter()
     ignored_counts = Counter()
     duplicate_candidates = 0
+    empty_lidar_frames = []
     for frame in tqdm(frames, desc=frames[0].sample_id.rsplit("-", 1)[0]):
         image = single.prepare_image(
             frame, out_root, args.jpeg_quality, args.skip_undistort)
         lidar, lidar_audit = convert_result_lidar(
-            frame, out_root, args.point_cloud_range, lidar_coordinate_frame)
+            frame, out_root, args.point_cloud_range, lidar_coordinate_frame,
+            allow_empty=True)
+        if lidar is None:
+            empty_lidar_frames.append({
+                "sample_id": frame.sample_id,
+                "lidar_path": str(frame.lidar_path),
+                "lidar_audit": lidar_audit,
+            })
+            if len(empty_lidar_frames) > args.max_empty_lidar_frames:
+                raise ValueError(
+                    "{} exceeds --max-empty-lidar-frames={}; latest={}".
+                    format(frame.sample_id.rsplit("-", 1)[0],
+                           args.max_empty_lidar_frames, frame.lidar_path))
         radar_raw, radar_names, radar_comments = single.read_ply_vertices(
             frame.radar_path)
         try:
@@ -359,6 +382,7 @@ def convert_sequence(frames: Sequence, out_root: Path, args,
             "radar_timestamp_us": radar_timestamp_us, "boxes": boxes,
             "names": names, "velocities": velocities, "sources": sources,
             "lidar_audit": lidar_audit, "radar_audit": radar_audit,
+            "lidar_valid": lidar is not None,
             "radar_timestamp_valid": bool(
                 abs(radar_difference_ms) <= args.max_radar_gt_delta_ms),
         })
@@ -366,6 +390,8 @@ def convert_sequence(frames: Sequence, out_root: Path, args,
     infos = []
     dropped_keyframes = []
     for local_index, (frame, item) in enumerate(zip(frames, converted)):
+        if not item["lidar_valid"]:
+            continue
         temporal_indices = [local_index] + [
             max(0, local_index - offset)
             for offset in range(1, args.num_sweeps + 1)
@@ -430,6 +456,8 @@ def convert_sequence(frames: Sequence, out_root: Path, args,
         })
     return infos, {
         "source_frames": len(frames), "frames": len(infos),
+        "dropped_keyframes_empty_lidar": len(empty_lidar_frames),
+        "empty_lidar_examples": empty_lidar_frames[:20],
         "dropped_keyframes_radar_timestamp": len(dropped_keyframes),
         "dropped_keyframe_examples": dropped_keyframes[:20],
         "max_radar_gt_delta_ms": args.max_radar_gt_delta_ms,
@@ -448,6 +476,8 @@ def main() -> None:
     args = parse_args()
     if args.num_sweeps < 0:
         raise ValueError("--num-sweeps must be non-negative")
+    if args.max_empty_lidar_frames < 0:
+        raise ValueError("--max-empty-lidar-frames must be non-negative")
     manifest = json.loads(args.split_manifest.read_text())
     selected = [sequence for split in args.splits for sequence in manifest[split]]
     if len(selected) != len(set(selected)):
