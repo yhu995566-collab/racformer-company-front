@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 GPU=${1:-1}
-DATASET_ROOT=${RACFORMER_COMPANY_PROCESSED_ROOT:-$HOME/hyh/company_20260818/processed_racformer}
+DATASET_ROOT=${RACFORMER_COMPANY_PROCESSED_ROOT:-/mnt/diskNvme1/hyh/datasets/company_20260818/processed_racformer}
 RUN_TAG=$(date +%Y%m%d_%H%M%S)
 RESULT_ROOT=${Q_PROFILE_RESULT_ROOT:-/mnt/diskNvme1/hyh/results/RaCFormer/company_20260818_q1_q5_profiles/$RUN_TAG}
 LATEST_FILE=/mnt/diskNvme1/hyh/results/RaCFormer/company_20260818_q1_q5_profiles/latest_run.txt
@@ -11,6 +11,13 @@ LATEST_FILE=/mnt/diskNvme1/hyh/results/RaCFormer/company_20260818_q1_q5_profiles
 mkdir -p "$RESULT_ROOT"
 echo "$RESULT_ROOT" > "$LATEST_FILE"
 cd "$REPO_ROOT"
+
+require_file() {
+    if [[ ! -f "$1" ]]; then
+        echo "ERROR: required file not found: $1" >&2
+        exit 3
+    fi
+}
 
 declare -A RUN_DIRS=(
     [q1]="outputs/3dh_query_company_20260818_q1/2026-08-21/10-12-05"
@@ -27,15 +34,16 @@ declare -A EPOCHS=(
     [q5]=34
 )
 
-test -f "$DATASET_ROOT/custom_infos_val_sweep.pkl"
+require_file "$DATASET_ROOT/custom_infos_val_sweep.pkl"
+echo "Q profile preflight: dataset_root=$DATASET_ROOT GPU=$GPU result_root=$RESULT_ROOT"
 
 for q in q1 q2 q3 q4 q5; do
     config="configs/3dh_query_company_20260818_${q}.py"
     checkpoint="${RUN_DIRS[$q]}/epoch_${EPOCHS[$q]}.pth"
     output_dir="$RESULT_ROOT/$q"
     mkdir -p "$output_dir"
-    test -f "$config"
-    test -f "$checkpoint"
+    require_file "$config"
+    require_file "$checkpoint"
 
     echo "===== ${q^^}: epoch ${EPOCHS[$q]} =====" | tee "$output_dir/header.txt"
     CUDA_VISIBLE_DEVICES="$GPU" \
