@@ -281,6 +281,13 @@ def convert_result_lidar(frame, out_root: Path,
     model_finite = np.isfinite(points[:, :3]).all(axis=1)
     model_xyz = points[model_finite, :3]
     points = points[roi_mask(points, point_cloud_range)]
+    if not len(points):
+        raise ValueError(
+            "{} has zero LiDAR points in ROI after {}->ego normalization; "
+            "source_xyz_min={}, source_xyz_max={}".format(
+                frame.lidar_path, coordinate_frame,
+                source_xyz.min(axis=0).tolist() if len(source_xyz) else None,
+                source_xyz.max(axis=0).tolist() if len(source_xyz) else None))
     output = out_root / "lidar" / (frame.sample_id + ".npy")
     output.parent.mkdir(parents=True, exist_ok=True)
     np.save(output, points)
