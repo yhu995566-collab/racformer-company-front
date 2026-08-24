@@ -172,6 +172,8 @@ def convert_result_lidar(frame, out_root: Path,
     points[:, :4] = np.column_stack(
         [fields["x"], fields["y"], fields["z"], fields["intensity"]])
     source_count = count
+    source_finite = np.isfinite(points[:, :3]).all(axis=1)
+    source_xyz = points[source_finite, :3]
     points = points[roi_mask(points, point_cloud_range)]
     output = out_root / "lidar" / (frame.sample_id + ".npy")
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -179,6 +181,11 @@ def convert_result_lidar(frame, out_root: Path,
     return output.resolve(), {
         "source_points": source_count,
         "cropped_points": len(points),
+        "cropped_ratio": float(len(points)) / max(1, source_count),
+        "source_xyz_min": source_xyz.min(axis=0).tolist()
+        if len(source_xyz) else None,
+        "source_xyz_max": source_xyz.max(axis=0).tolist()
+        if len(source_xyz) else None,
         "xyz_min": points[:, :3].min(axis=0).tolist() if len(points) else None,
         "xyz_max": points[:, :3].max(axis=0).tolist() if len(points) else None,
     }
@@ -199,7 +206,13 @@ def convert_sequence(frames: Sequence, out_root: Path, args) -> Tuple[List[Dict]
         radar_timestamp_us, radar_audit = single.aligned_radar_timestamp_us(
             radar_comments, frame.timestamp_us)
         radar = single.convert_radar(radar_raw, radar_names, frame.car_twist)
+        radar_source_points = len(radar)
         radar = radar[roi_mask(radar, args.point_cloud_range)]
+        radar_audit.update({
+            "source_points": radar_source_points,
+            "cropped_points": len(radar),
+            "cropped_ratio": float(len(radar)) / max(1, radar_source_points),
+        })
         radar_path = out_root / "radar" / (frame.sample_id + ".npy")
         radar_path.parent.mkdir(parents=True, exist_ok=True)
         np.save(radar_path, radar)
@@ -270,6 +283,8 @@ def convert_sequence(frames: Sequence, out_root: Path, args) -> Tuple[List[Dict]
         "duplicate_cross_source_candidates": int(duplicate_candidates),
         "first_lidar": converted[0]["lidar_audit"],
         "last_lidar": converted[-1]["lidar_audit"],
+        "first_radar": converted[0]["radar_audit"],
+        "last_radar": converted[-1]["radar_audit"],
     }
 
 
