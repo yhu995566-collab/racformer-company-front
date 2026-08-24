@@ -81,6 +81,97 @@ def find_truth_sequence(truth_root: Path, sequence: str) -> Tuple[Path, str]:
     return matches[0].resolve(), matches[0].parent.name
 
 
+def read_ply_comments(path: Path) -> Dict[str, str]:
+    """Read only an ASCII PLY header, without loading its point payload."""
+    comments = {}
+    with path.open("rb") as stream:
+        if stream.readline().decode("ascii").strip() != "ply":
+            raise ValueError("{} is not PLY".format(path))
+        while True:
+            raw = stream.readline()
+            if not raw:
+                raise ValueError("{} has no end_header".format(path))
+            line = raw.decode("ascii").strip()
+            if line.startswith("comment "):
+                parts = line.split(maxsplit=2)
+                if len(parts) == 3:
+                    comments[parts[1]] = parts[2]
+            elif line == "end_header":
+                return comments
+
+
+def radar_aligned_timestamp_us(path: Path) -> int:
+    comments = read_ply_comments(path)
+    try:
+        return int(comments["rspTimestamp"]) + int(comments["syncTimediff"])
+    except (KeyError, ValueError) as error:
+        raise ValueError(
+            "{} requires integer rspTimestamp and syncTimediff comments".format(
+                path)) from error
+
+
+def _timestamp_stats(deltas_ms: np.ndarray) -> Dict:
+    absolute = np.abs(deltas_ms)
+    return {
+        "min_ms": float(deltas_ms.min()),
+        "median_ms": float(np.median(deltas_ms)),
+        "max_ms": float(deltas_ms.max()),
+        "abs_p50_ms": float(np.percentile(absolute, 50)),
+        "abs_p95_ms": float(np.percentile(absolute, 95)),
+        "abs_p99_ms": float(np.percentile(absolute, 99)),
+        "abs_max_ms": float(absolute.max()),
+        "count_abs_gt_50ms": int(np.count_nonzero(absolute > 50.0)),
+        "count_abs_gt_100ms": int(np.count_nonzero(absolute > 100.0)),
+        "count_abs_gt_250ms": int(np.count_nonzero(absolute > 250.0)),
+    }
+
+
+def audit_radar_timestamps(frames: Sequence) -> Dict:
+    gt_us = np.asarray([frame.timestamp_us for frame in frames], dtype=np.int64)
+    radar_us = np.asarray([
+        radar_aligned_timestamp_us(frame.radar_path) for frame in frames
+    ], dtype=np.int64)
+    same_deltas_ms = (radar_us - gt_us) / 1000.0
+
+    if np.any(np.diff(radar_us) <= 0):
+        monotonic = False
+        nearest_indices = np.asarray([
+            int(np.argmin(np.abs(radar_us - timestamp))) for timestamp in gt_us
+        ], dtype=np.int64)
+    else:
+        monotonic = True
+        right = np.searchsorted(radar_us, gt_us, side="left")
+        right = np.clip(right, 0, len(radar_us) - 1)
+        left = np.clip(right - 1, 0, len(radar_us) - 1)
+        choose_left = np.abs(radar_us[left] - gt_us) <= np.abs(
+            radar_us[right] - gt_us)
+        nearest_indices = np.where(choose_left, left, right)
+    nearest_deltas_ms = (
+        radar_us[nearest_indices] - gt_us) / 1000.0
+    offsets = nearest_indices - np.arange(len(frames), dtype=np.int64)
+    offset_counts = Counter(offsets.tolist())
+    worst = np.argsort(np.abs(same_deltas_ms))[-10:][::-1]
+    return {
+        "radar_timestamps_strictly_increasing": monotonic,
+        "same_ordinal": _timestamp_stats(same_deltas_ms),
+        "nearest_timestamp": _timestamp_stats(nearest_deltas_ms),
+        "nearest_unique_radar_frames": int(len(np.unique(nearest_indices))),
+        "nearest_reused_radar_frames": int(
+            len(nearest_indices) - len(np.unique(nearest_indices))),
+        "nearest_index_offset_counts": {
+            str(key): int(value) for key, value in sorted(offset_counts.items())
+        },
+        "worst_same_ordinal": [{
+            "local_index": int(index),
+            "radar_file": frames[index].radar_path.name,
+            "gt_file": frames[index].gt_path.name,
+            "delta_ms": float(same_deltas_ms[index]),
+            "nearest_radar_local_index": int(nearest_indices[index]),
+            "nearest_delta_ms": float(nearest_deltas_ms[index]),
+        } for index in worst],
+    }
+
+
 def contiguous_start(indices, modality: str, sequence: str) -> int:
     ordered = sorted(indices)
     if not ordered:
@@ -323,7 +414,8 @@ def main() -> None:
             if args.dry_run:
                 sequence_summaries[sequence] = {
                     "scenario": scenario, "frames": len(frames),
-                    "alignment": alignment}
+                    "alignment": alignment,
+                    "radar_timestamp_audit": audit_radar_timestamps(frames)}
                 continue
             infos, audit = convert_sequence(frames, out_root, args)
             split_infos.extend(infos)
