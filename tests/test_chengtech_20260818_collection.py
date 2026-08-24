@@ -47,10 +47,35 @@ def test_result_lidar_adds_zero_ring_channel(tmp_path):
     frame = type("Frame", (), {"lidar_path": Path("input.pcd"),
                                 "sample_id": "sequence-000000"})()
     output, audit = converter.convert_result_lidar(
-        frame, tmp_path, (0.0, -10.0, -10.0, 10.0, 10.0, 10.0))
+        frame, tmp_path, (0.0, -10.0, -10.0, 10.0, 10.0, 10.0), "ego")
     points = np.load(output)
     assert points.shape == (2, 5)
     assert np.array_equal(points[:, :4], np.column_stack(list(fields.values())))
     assert np.count_nonzero(points[:, 4]) == 0
     assert audit["source_points"] == 2
     assert audit["cropped_points"] == 2
+
+
+def test_global_result_lidar_is_transformed_to_ego(tmp_path):
+    converter = load_collection_converter()
+    fields = {
+        "x": np.asarray([11.0], dtype=np.float32),
+        "y": np.asarray([2.0], dtype=np.float32),
+        "z": np.asarray([3.0], dtype=np.float32),
+        "intensity": np.asarray([7.0], dtype=np.float32),
+    }
+    converter.single.read_binary_compressed_pcd = lambda _: fields
+    ego2global = np.eye(4, dtype=np.float32)
+    ego2global[:3, 3] = [10.0, 0.0, 0.0]
+    frame = type("Frame", (), {
+        "lidar_path": Path("input.pcd"),
+        "sample_id": "sequence-000000",
+        "ego2global": ego2global,
+    })()
+    output, audit = converter.convert_result_lidar(
+        frame, tmp_path,
+        (0.0, -10.0, -10.0, 10.0, 10.0, 10.0), "global")
+    points = np.load(output)
+    assert np.allclose(points[0, :3], [1.0, 2.0, 3.0])
+    assert audit["coordinate_frame"] == "global"
+    assert audit["cropped_points"] == 1

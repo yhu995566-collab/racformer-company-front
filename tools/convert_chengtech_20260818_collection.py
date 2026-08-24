@@ -45,6 +45,10 @@ def parse_args() -> argparse.Namespace:
         default=("test",), help="Only selected splits are converted")
     parser.add_argument("--num-sweeps", type=int, default=3)
     parser.add_argument(
+        "--max-radar-gt-delta-ms", type=float, default=50.0,
+        help="Drop keyframes whose temporal window contains a radar/GT "
+             "timestamp error above this value")
+    parser.add_argument(
         "--point-cloud-range", type=float, nargs=6,
         default=(0.0, -20.0, -3.0, 50.0, 20.0, 3.0),
         metavar=("X_MIN", "Y_MIN", "Z_MIN", "X_MAX", "Y_MAX", "Z_MAX"),
@@ -250,7 +254,8 @@ def roi_mask(points: np.ndarray, point_cloud_range: Sequence[float]) -> np.ndarr
 
 
 def convert_result_lidar(frame, out_root: Path,
-                         point_cloud_range: Sequence[float]) -> Tuple[Path, Dict]:
+                         point_cloud_range: Sequence[float],
+                         coordinate_frame: str = "ego") -> Tuple[Path, Dict]:
     fields = single.read_binary_compressed_pcd(frame.lidar_path)
     required = {"x", "y", "z", "intensity"}
     if set(fields) != required:
@@ -265,24 +270,40 @@ def convert_result_lidar(frame, out_root: Path,
     source_count = count
     source_finite = np.isfinite(points[:, :3]).all(axis=1)
     source_xyz = points[source_finite, :3]
+    if coordinate_frame == "global":
+        global_to_ego = np.linalg.inv(frame.ego2global)
+        xyz1 = np.column_stack(
+            [points[:, :3], np.ones(len(points), dtype=np.float32)])
+        points[:, :3] = (xyz1 @ global_to_ego.T)[:, :3]
+    elif coordinate_frame != "ego":
+        raise ValueError(
+            "unsupported LiDAR coordinate frame: {}".format(coordinate_frame))
+    model_finite = np.isfinite(points[:, :3]).all(axis=1)
+    model_xyz = points[model_finite, :3]
     points = points[roi_mask(points, point_cloud_range)]
     output = out_root / "lidar" / (frame.sample_id + ".npy")
     output.parent.mkdir(parents=True, exist_ok=True)
     np.save(output, points)
     return output.resolve(), {
         "source_points": source_count,
+        "coordinate_frame": coordinate_frame,
         "cropped_points": len(points),
         "cropped_ratio": float(len(points)) / max(1, source_count),
         "source_xyz_min": source_xyz.min(axis=0).tolist()
         if len(source_xyz) else None,
         "source_xyz_max": source_xyz.max(axis=0).tolist()
         if len(source_xyz) else None,
+        "model_xyz_min": model_xyz.min(axis=0).tolist()
+        if len(model_xyz) else None,
+        "model_xyz_max": model_xyz.max(axis=0).tolist()
+        if len(model_xyz) else None,
         "xyz_min": points[:, :3].min(axis=0).tolist() if len(points) else None,
         "xyz_max": points[:, :3].max(axis=0).tolist() if len(points) else None,
     }
 
 
-def convert_sequence(frames: Sequence, out_root: Path, args) -> Tuple[List[Dict], Dict]:
+def convert_sequence(frames: Sequence, out_root: Path, args,
+                     lidar_coordinate_frame: str) -> Tuple[List[Dict], Dict]:
     converted = []
     class_counts = Counter()
     ignored_counts = Counter()
@@ -291,11 +312,26 @@ def convert_sequence(frames: Sequence, out_root: Path, args) -> Tuple[List[Dict]
         image = single.prepare_image(
             frame, out_root, args.jpeg_quality, args.skip_undistort)
         lidar, lidar_audit = convert_result_lidar(
-            frame, out_root, args.point_cloud_range)
+            frame, out_root, args.point_cloud_range, lidar_coordinate_frame)
         radar_raw, radar_names, radar_comments = single.read_ply_vertices(
             frame.radar_path)
-        radar_timestamp_us, radar_audit = single.aligned_radar_timestamp_us(
-            radar_comments, frame.timestamp_us)
+        try:
+            radar_raw_timestamp_us = int(radar_comments["rspTimestamp"])
+            radar_sync_difference_us = int(radar_comments["syncTimediff"])
+        except (KeyError, ValueError) as error:
+            raise ValueError(
+                "{} requires integer rspTimestamp and syncTimediff".format(
+                    frame.radar_path)) from error
+        radar_timestamp_us = radar_raw_timestamp_us + radar_sync_difference_us
+        radar_difference_ms = (
+            radar_timestamp_us - frame.timestamp_us) / 1000.0
+        radar_audit = {
+            "radar_timestamp_unit": "microseconds",
+            "radar_raw_timestamp_us": radar_raw_timestamp_us,
+            "radar_sync_difference_us": radar_sync_difference_us,
+            "radar_aligned_timestamp_us": radar_timestamp_us,
+            "radar_to_gt_difference_ms": radar_difference_ms,
+        }
         radar = single.convert_radar(radar_raw, radar_names, frame.car_twist)
         radar_source_points = len(radar)
         radar = radar[roi_mask(radar, args.point_cloud_range)]
@@ -316,10 +352,27 @@ def convert_sequence(frames: Sequence, out_root: Path, args) -> Tuple[List[Dict]
             "radar_timestamp_us": radar_timestamp_us, "boxes": boxes,
             "names": names, "velocities": velocities, "sources": sources,
             "lidar_audit": lidar_audit, "radar_audit": radar_audit,
+            "radar_timestamp_valid": bool(
+                abs(radar_difference_ms) <= args.max_radar_gt_delta_ms),
         })
 
     infos = []
+    dropped_keyframes = []
     for local_index, (frame, item) in enumerate(zip(frames, converted)):
+        temporal_indices = [local_index] + [
+            max(0, local_index - offset)
+            for offset in range(1, args.num_sweeps + 1)
+        ]
+        invalid_temporal_indices = [
+            index for index in temporal_indices
+            if not converted[index]["radar_timestamp_valid"]
+        ]
+        if invalid_temporal_indices:
+            dropped_keyframes.append({
+                "local_index": local_index,
+                "invalid_temporal_indices": sorted(set(invalid_temporal_indices)),
+            })
+            continue
         current_camera = single.camera_entry(
             Path(single.relative_path(item["image"], out_root)),
             frame.timestamp_us, np.eye(4))
@@ -369,7 +422,12 @@ def convert_sequence(frames: Sequence, out_root: Path, args) -> Tuple[List[Dict]
             "valid_flag": np.ones(len(item["boxes"]), dtype=bool),
         })
     return infos, {
-        "frames": len(frames), "class_counts": dict(sorted(class_counts.items())),
+        "source_frames": len(frames), "frames": len(infos),
+        "dropped_keyframes_radar_timestamp": len(dropped_keyframes),
+        "dropped_keyframe_examples": dropped_keyframes[:20],
+        "max_radar_gt_delta_ms": args.max_radar_gt_delta_ms,
+        "lidar_coordinate_frame": lidar_coordinate_frame,
+        "class_counts": dict(sorted(class_counts.items())),
         "ignored_type_counts": dict(sorted(ignored_counts.items())),
         "duplicate_cross_source_candidates": int(duplicate_candidates),
         "first_lidar": converted[0]["lidar_audit"],
@@ -399,6 +457,7 @@ def main() -> None:
         "info_version": "racformer_chengtech_20260818_collection_v1",
         "classes": single.CLASS_NAMES, "num_sweeps": args.num_sweeps,
         "point_cloud_range": list(args.point_cloud_range),
+        "max_radar_gt_delta_ms": args.max_radar_gt_delta_ms,
         "split_manifest": str(args.split_manifest.resolve()),
     }
     summary = {"source_root": str(args.data_root.resolve()),
@@ -417,7 +476,10 @@ def main() -> None:
                     "alignment": alignment,
                     "radar_timestamp_audit": audit_radar_timestamps(frames)}
                 continue
-            infos, audit = convert_sequence(frames, out_root, args)
+            lidar_coordinate_frame = manifest.get(
+                "lidar_coordinate_frames", {}).get(sequence, "ego")
+            infos, audit = convert_sequence(
+                frames, out_root, args, lidar_coordinate_frame)
             split_infos.extend(infos)
             sequence_summaries[sequence] = {
                 "scenario": scenario, "alignment": alignment, **audit}
