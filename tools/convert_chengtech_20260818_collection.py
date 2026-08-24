@@ -81,6 +81,18 @@ def find_truth_sequence(truth_root: Path, sequence: str) -> Tuple[Path, str]:
     return matches[0].resolve(), matches[0].parent.name
 
 
+def contiguous_start(indices, modality: str, sequence: str) -> int:
+    ordered = sorted(indices)
+    if not ordered:
+        raise ValueError("{} has no {} frames".format(sequence, modality))
+    expected = list(range(ordered[0], ordered[0] + len(ordered)))
+    if ordered != expected:
+        raise ValueError(
+            "{} {} frame IDs are not contiguous: first={}, last={}, count={}".format(
+                sequence, modality, ordered[0], ordered[-1], len(ordered)))
+    return ordered[0]
+
+
 def discover_sequence(data_root: Path, truth_root: Path, sequence: str):
     source = data_root / sequence
     truth, scenario = find_truth_sequence(truth_root, sequence)
@@ -89,38 +101,52 @@ def discover_sequence(data_root: Path, truth_root: Path, sequence: str):
     labels = _indexed_files(source / "GT", ".json")
     lidar_dir = truth / "result" / "pcd"
     lidars = {int(path.stem): path.resolve() for path in lidar_dir.glob("*.pcd")}
-    index_sets = {
-        "image": set(images), "radar": set(radars), "GT": set(labels),
-        "lidar": set(lidars),
+    modalities = {
+        "image": images, "radar": radars, "GT": labels, "lidar": lidars,
     }
-    expected = set(labels)
-    if not expected or any(indices != expected for indices in index_sets.values()):
-        counts = {name: len(indices) for name, indices in index_sets.items()}
+    counts = {name: len(files) for name, files in modalities.items()}
+    if not counts["GT"] or len(set(counts.values())) != 1:
         raise ValueError(
-            "{} modalities do not contain identical frame IDs: {}".format(
+            "{} modalities do not contain identical frame counts: {}".format(
                 sequence, counts))
-    if expected != set(range(len(expected))):
-        raise ValueError("{} frame IDs are not contiguous from zero".format(sequence))
+    starts = {
+        name: contiguous_start(files, name, sequence)
+        for name, files in modalities.items()
+    }
+    if starts["GT"] != 0 or starts["lidar"] != 0:
+        raise ValueError(
+            "{} GT and result LiDAR must start at zero; got {}".format(
+                sequence, {name: starts[name] for name in ("GT", "lidar")}))
 
     frames = []
-    for index in sorted(expected):
-        gt = json.loads(labels[index].read_text())
+    for index in range(counts["GT"]):
+        image_path = images[index + starts["image"]]
+        radar_path = radars[index + starts["radar"]]
+        gt_path = labels[index]
+        lidar_path = lidars[index]
+        gt = json.loads(gt_path.read_text())
         if int(gt["frame_num"]) != index:
             raise ValueError("{} declares frame_num {}".format(
-                labels[index], gt["frame_num"]))
+                gt_path, gt["frame_num"]))
         frames.append(single.Frame(
             index=index,
             sample_id="{}-{:06d}".format(sequence, index),
             timestamp_us=int(round(float(gt["stamp_sec"]) * 1e6)),
-            image_path=images[index], radar_path=radars[index],
-            lidar_path=lidars[index], gt_path=labels[index], gt=gt,
+            image_path=image_path, radar_path=radar_path,
+            lidar_path=lidar_path, gt_path=gt_path, gt=gt,
             ego2global=single.parse_pose(gt["frame_info"]),
             car_twist=float(gt["frame_info"]["car_twist"]),
         ))
     timestamps = np.asarray([frame.timestamp_us for frame in frames])
     if np.any(np.diff(timestamps) <= 0):
         raise ValueError("{} GT timestamps are not strictly increasing".format(sequence))
-    return frames, scenario
+    alignment = {
+        "image_file_index_offset": starts["image"],
+        "radar_file_index_offset": starts["radar"],
+        "gt_file_index_offset": starts["GT"],
+        "lidar_file_index_offset": starts["lidar"],
+    }
+    return frames, scenario, alignment
 
 
 def roi_mask(points: np.ndarray, point_cloud_range: Sequence[float]) -> np.ndarray:
@@ -274,17 +300,19 @@ def main() -> None:
     for split in args.splits:
         split_infos, sequence_summaries = [], {}
         for sequence in manifest[split]:
-            frames, scenario = discover_sequence(
+            frames, scenario, alignment = discover_sequence(
                 args.data_root.resolve(), args.truth_root.resolve(), sequence)
             if args.limit_per_sequence is not None:
                 frames = frames[:args.limit_per_sequence]
             if args.dry_run:
                 sequence_summaries[sequence] = {
-                    "scenario": scenario, "frames": len(frames)}
+                    "scenario": scenario, "frames": len(frames),
+                    "alignment": alignment}
                 continue
             infos, audit = convert_sequence(frames, out_root, args)
             split_infos.extend(infos)
-            sequence_summaries[sequence] = {"scenario": scenario, **audit}
+            sequence_summaries[sequence] = {
+                "scenario": scenario, "alignment": alignment, **audit}
         if args.dry_run:
             summary["splits"][split] = {
                 "frames": sum(item["frames"] for item in sequence_summaries.values()),
