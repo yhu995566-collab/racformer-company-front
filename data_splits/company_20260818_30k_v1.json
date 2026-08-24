@@ -1,0 +1,23 @@
+{
+  "description": "Sequence-disjoint split for the synchronized 2026-08-18 ChengTech capture. The test split is frozen before 30k-model training.",
+  "train": [
+    "2026-08-18-15-46-14",
+    "2026-08-18-16-01-30",
+    "2026-08-18-16-03-55",
+    "2026-08-18-16-13-55",
+    "2026-08-18-16-18-50",
+    "2026-08-18-16-23-50",
+    "2026-08-18-16-28-50"
+  ],
+  "val": [],
+  "test": [
+    "2026-08-18-15-51-14",
+    "2026-08-18-16-08-55",
+    "2026-08-18-16-33-50"
+  ],
+  "test_scenarios": {
+    "2026-08-18-15-51-14": "urban_road",
+    "2026-08-18-16-08-55": "tunnel",
+    "2026-08-18-16-33-50": "highway_urban_roadside"
+  }
+}
