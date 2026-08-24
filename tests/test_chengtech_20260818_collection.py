@@ -32,6 +32,7 @@ def test_frozen_collection_split_has_no_sequence_leakage():
 def test_modality_frame_ids_may_have_a_fixed_offset():
     converter = load_collection_converter()
     assert converter.contiguous_start({3, 4, 5}, "image", "sequence") == 3
+    assert converter.contiguous_start({0, 1, 2}, "lidar", "sequence") == 0
 
 
 def test_result_lidar_adds_zero_ring_channel(tmp_path):

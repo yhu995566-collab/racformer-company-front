@@ -113,21 +113,21 @@ def discover_sequence(data_root: Path, truth_root: Path, sequence: str):
         name: contiguous_start(files, name, sequence)
         for name, files in modalities.items()
     }
-    if starts["GT"] != 0 or starts["lidar"] != 0:
-        raise ValueError(
-            "{} GT and result LiDAR must start at zero; got {}".format(
-                sequence, {name: starts[name] for name in ("GT", "lidar")}))
-
     frames = []
+    declared_frame_start = None
     for index in range(counts["GT"]):
         image_path = images[index + starts["image"]]
         radar_path = radars[index + starts["radar"]]
-        gt_path = labels[index]
-        lidar_path = lidars[index]
+        gt_path = labels[index + starts["GT"]]
+        lidar_path = lidars[index + starts["lidar"]]
         gt = json.loads(gt_path.read_text())
-        if int(gt["frame_num"]) != index:
-            raise ValueError("{} declares frame_num {}".format(
-                gt_path, gt["frame_num"]))
+        declared_frame = int(gt["frame_num"])
+        if declared_frame_start is None:
+            declared_frame_start = declared_frame
+        if declared_frame != declared_frame_start + index:
+            raise ValueError(
+                "{} declares non-contiguous frame_num {}; expected {}".format(
+                    gt_path, declared_frame, declared_frame_start + index))
         frames.append(single.Frame(
             index=index,
             sample_id="{}-{:06d}".format(sequence, index),
@@ -145,6 +145,7 @@ def discover_sequence(data_root: Path, truth_root: Path, sequence: str):
         "radar_file_index_offset": starts["radar"],
         "gt_file_index_offset": starts["GT"],
         "lidar_file_index_offset": starts["lidar"],
+        "gt_declared_frame_offset": declared_frame_start,
     }
     return frames, scenario, alignment
 
