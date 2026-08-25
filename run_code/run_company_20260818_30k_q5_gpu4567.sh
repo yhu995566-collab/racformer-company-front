@@ -15,6 +15,7 @@ IFS=',' read -r -a GPU_LIST <<< "$GPU_IDS"
 GPU_COUNT=${#GPU_LIST[@]}
 TARGET_GLOBAL_BATCH=${COMPANY_30K_Q5_GLOBAL_BATCH:-4}
 TRAIN_LR=${COMPANY_30K_Q5_TRAIN_LR:-4e-4}
+WAIT_FOR_50M=${COMPANY_30K_Q5_WAIT_FOR_50M:-1}
 
 usage() {
     echo "Usage: $0 --background | --run RUN_DIR"
@@ -71,6 +72,10 @@ if (( TARGET_GLOBAL_BATCH < GPU_COUNT ||
     exit 2
 fi
 ACCUMULATIVE_ITERS=$((TARGET_GLOBAL_BATCH / GPU_COUNT))
+if [[ $WAIT_FOR_50M != 0 && $WAIT_FOR_50M != 1 ]]; then
+    echo "COMPANY_30K_Q5_WAIT_FOR_50M must be 0 or 1" >&2
+    exit 2
+fi
 
 RUN_DIR=$2
 mkdir -p "$RUN_DIR" "$PROCESSED_ROOT"
@@ -84,11 +89,15 @@ for required in "$MANIFEST" "$CONFIG" \
     [[ -f $required ]] || fail "missing required file: $required"
 done
 
-log "queue configured: GPUs=$GPU_IDS gpu_count=$GPU_COUNT effective_global_batch=$TARGET_GLOBAL_BATCH accumulation=$ACCUMULATIVE_ITERS train_lr=$TRAIN_LR processed_root=$PROCESSED_ROOT"
-log "waiting for any active 50m train/val conversion to finish"
-while pgrep -f 'convert_chengtech_20260818_collection.py.*processed_trainval_v1.*--splits train val' >/dev/null; do
-    sleep 30
-done
+log "queue configured: GPUs=$GPU_IDS gpu_count=$GPU_COUNT effective_global_batch=$TARGET_GLOBAL_BATCH accumulation=$ACCUMULATIVE_ITERS train_lr=$TRAIN_LR wait_for_50m=$WAIT_FOR_50M processed_root=$PROCESSED_ROOT"
+if [[ $WAIT_FOR_50M == 1 ]]; then
+    log "waiting for any active 50m train/val conversion to finish"
+    while pgrep -f 'convert_chengtech_20260818_collection.py.*processed_trainval_v1.*--splits train val' >/dev/null; do
+        sleep 30
+    done
+else
+    log "starting concurrently with active 50m conversion; disk throughput may decrease"
+fi
 
 log "starting isolated 350m train/val conversion"
 if python -u tools/convert_chengtech_20260818_collection.py \

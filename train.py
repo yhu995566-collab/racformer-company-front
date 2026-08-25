@@ -160,10 +160,15 @@ def main():
     runner.register_custom_hooks(dict(type="DistSamplerSeedHook"))
 
     if cfgs.eval_config["interval"] > 0:
+        eval_config = dict(cfgs.eval_config)
+        eval_interval = eval_config.pop("interval")
         if world_size > 1:
-            runner.register_hook(DistEvalHook(val_loader, interval=cfgs.eval_config["interval"], gpu_collect=True))
+            runner.register_hook(DistEvalHook(
+                val_loader, interval=eval_interval, gpu_collect=True,
+                **eval_config))
         else:
-            runner.register_hook(EvalHook(val_loader, interval=cfgs.eval_config["interval"]))
+            runner.register_hook(EvalHook(
+                val_loader, interval=eval_interval, **eval_config))
 
     if cfgs.resume_from is not None:
         logging.info("Resuming from %s" % cfgs.resume_from)
