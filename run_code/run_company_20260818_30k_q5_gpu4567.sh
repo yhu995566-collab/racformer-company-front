@@ -74,6 +74,8 @@ if python -u tools/convert_chengtech_20260818_collection.py \
         --point-cloud-range 0 -20 -3 350 20 3 \
         --max-empty-lidar-frames 32 \
         --reuse-existing-lidar \
+        --reuse-existing-radar \
+        --resume-sequence-cache \
         > "$RUN_DIR/convert_350m.log" 2>&1; then
     touch "$RUN_DIR/CONVERSION_DONE"
     log "350m conversion completed"

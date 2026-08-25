@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import pickle
 import sys
 from pathlib import Path
 
@@ -123,3 +124,38 @@ def test_existing_result_lidar_is_validated_and_reused(tmp_path):
     assert actual == output.resolve()
     assert audit["reused_existing"] is True
     assert audit["cropped_points"] == 1
+
+
+def test_atomic_pickle_dump_replaces_complete_payload(tmp_path):
+    converter = load_collection_converter()
+    output = tmp_path / "cache" / "sequence.pkl"
+    converter.atomic_pickle_dump({"version": 1}, output)
+    converter.atomic_pickle_dump({"version": 2}, output)
+    with output.open("rb") as stream:
+        assert pickle.load(stream) == {"version": 2}
+    assert not list(output.parent.glob("*.tmp.*"))
+
+
+def test_cached_infos_require_all_referenced_artifacts(tmp_path):
+    converter = load_collection_converter()
+    for relative in ("lidar/frame.npy", "radar/frame.npy", "images/frame.jpeg"):
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"data")
+    infos = [{
+        "lidar_path": "lidar/frame.npy",
+        "radar_path": "radar/frame.npy",
+        "cams": {"CAM_FRONT": {"data_path": "images/frame.jpeg"}},
+        "sweeps": [],
+    }]
+    converter.validate_cached_infos(
+        infos, {"frames": 1}, tmp_path, tmp_path / "cache.pkl")
+
+    (tmp_path / "radar/frame.npy").unlink()
+    try:
+        converter.validate_cached_infos(
+            infos, {"frames": 1}, tmp_path, tmp_path / "cache.pkl")
+    except ValueError as error:
+        assert "missing/empty artifact" in str(error)
+    else:
+        raise AssertionError("missing cached artifact was not rejected")

@@ -11,6 +11,7 @@ cross a train/validation/test boundary.
 import argparse
 import importlib.util
 import json
+import os
 import pickle
 import sys
 from collections import Counter
@@ -58,6 +59,14 @@ def parse_args() -> argparse.Namespace:
         help="Resume a failed conversion by validating and reusing existing "
              "cropped LiDAR NPY files. Disabled by default so a normal run "
              "always regenerates LiDAR from the source PCD.")
+    parser.add_argument(
+        "--reuse-existing-radar", action="store_true",
+        help="Validate and reuse existing cropped radar NPY files while "
+             "reading only source PLY headers for synchronization metadata.")
+    parser.add_argument(
+        "--resume-sequence-cache", action="store_true",
+        help="Atomically checkpoint infos after every complete sequence and "
+             "reuse matching checkpoints on restart.")
     parser.add_argument(
         "--point-cloud-range", type=float, nargs=6,
         default=(0.0, -20.0, -3.0, 50.0, 20.0, 3.0),
@@ -122,6 +131,83 @@ def radar_aligned_timestamp_us(path: Path) -> int:
         raise ValueError(
             "{} requires integer rspTimestamp and syncTimediff comments".format(
                 path)) from error
+
+
+def atomic_pickle_dump(payload, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name("{}.tmp.{}".format(path.name, os.getpid()))
+    try:
+        with temporary.open("wb") as stream:
+            pickle.dump(payload, stream, protocol=pickle.HIGHEST_PROTOCOL)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(str(temporary), str(path))
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def atomic_text_dump(text: str, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name("{}.tmp.{}".format(path.name, os.getpid()))
+    try:
+        with temporary.open("w") as stream:
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(str(temporary), str(path))
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def sequence_cache_signature(args, split: str, sequence: str, scenario: str,
+                             alignment: Dict, frame_count: int,
+                             lidar_coordinate_frame: str) -> Dict:
+    return {
+        "schema_version": 1,
+        "split": split,
+        "sequence": sequence,
+        "scenario": scenario,
+        "alignment": alignment,
+        "frame_count": frame_count,
+        "data_root": str(args.data_root.resolve()),
+        "truth_root": str(args.truth_root.resolve()),
+        "num_sweeps": args.num_sweeps,
+        "point_cloud_range": [float(value) for value in args.point_cloud_range],
+        "max_radar_gt_delta_ms": float(args.max_radar_gt_delta_ms),
+        "lidar_coordinate_frame": lidar_coordinate_frame,
+        "jpeg_quality": args.jpeg_quality,
+        "skip_undistort": args.skip_undistort,
+        "limit_per_sequence": args.limit_per_sequence,
+    }
+
+
+def validate_cached_infos(infos: Sequence[Dict], audit: Dict,
+                          out_root: Path, cache_path: Path) -> None:
+    if len(infos) != audit.get("frames"):
+        raise ValueError(
+            "{} infos/audit length mismatch: {} vs {}".format(
+                cache_path, len(infos), audit.get("frames")))
+
+    def require_artifact(value: str) -> None:
+        path = Path(value)
+        if not path.is_absolute():
+            path = out_root / path
+        if not path.is_file() or path.stat().st_size == 0:
+            raise ValueError(
+                "sequence cache {} references missing/empty artifact {}".
+                format(cache_path, path))
+
+    for info in infos:
+        require_artifact(info["lidar_path"])
+        require_artifact(info["radar_path"])
+        require_artifact(info["cams"]["CAM_FRONT"]["data_path"])
+        for sweep in info.get("sweeps", []):
+            if "CAM_FRONT" in sweep:
+                require_artifact(sweep["CAM_FRONT"]["data_path"])
+            if "RADAR_FRONT" in sweep:
+                require_artifact(sweep["RADAR_FRONT"]["data_path"])
 
 
 def _timestamp_stats(deltas_ms: np.ndarray) -> Dict:
@@ -377,8 +463,35 @@ def convert_sequence(frames: Sequence, out_root: Path, args,
                     "{} exceeds --max-empty-lidar-frames={}; latest={}".
                     format(frame.sample_id.rsplit("-", 1)[0],
                            args.max_empty_lidar_frames, frame.lidar_path))
-        radar_raw, radar_names, radar_comments = single.read_ply_vertices(
-            frame.radar_path)
+        radar_path = out_root / "radar" / (frame.sample_id + ".npy")
+        if args.reuse_existing_radar and radar_path.is_file():
+            radar_comments = read_ply_comments(frame.radar_path)
+            radar = np.load(radar_path, allow_pickle=False)
+            if radar.ndim != 2 or radar.shape[1] != 7:
+                raise ValueError(
+                    "existing radar output {} must have shape [N, 7]; got {}".
+                    format(radar_path, radar.shape))
+            if not np.isfinite(radar[:, :6]).all():
+                raise ValueError(
+                    "existing radar output {} contains non-finite values".
+                    format(radar_path))
+            if len(radar) and not roi_mask(
+                    radar, args.point_cloud_range).all():
+                raise ValueError(
+                    "existing radar output {} contains points outside ROI".
+                    format(radar_path))
+            radar_source_points = None
+            radar_reused = True
+        else:
+            radar_raw, radar_names, radar_comments = single.read_ply_vertices(
+                frame.radar_path)
+            radar = single.convert_radar(
+                radar_raw, radar_names, frame.car_twist)
+            radar_source_points = len(radar)
+            radar = radar[roi_mask(radar, args.point_cloud_range)]
+            radar_path.parent.mkdir(parents=True, exist_ok=True)
+            np.save(radar_path, radar)
+            radar_reused = False
         try:
             radar_raw_timestamp_us = int(radar_comments["rspTimestamp"])
             radar_sync_difference_us = int(radar_comments["syncTimediff"])
@@ -395,18 +508,15 @@ def convert_sequence(frames: Sequence, out_root: Path, args,
             "radar_sync_difference_us": radar_sync_difference_us,
             "radar_aligned_timestamp_us": radar_timestamp_us,
             "radar_to_gt_difference_ms": radar_difference_ms,
+            "reused_existing": radar_reused,
         }
-        radar = single.convert_radar(radar_raw, radar_names, frame.car_twist)
-        radar_source_points = len(radar)
-        radar = radar[roi_mask(radar, args.point_cloud_range)]
         radar_audit.update({
             "source_points": radar_source_points,
             "cropped_points": len(radar),
-            "cropped_ratio": float(len(radar)) / max(1, radar_source_points),
+            "cropped_ratio": (
+                float(len(radar)) / max(1, radar_source_points)
+                if radar_source_points is not None else None),
         })
-        radar_path = out_root / "radar" / (frame.sample_id + ".npy")
-        radar_path.parent.mkdir(parents=True, exist_ok=True)
-        np.save(radar_path, radar)
         boxes, names, velocities, sources, gt_audit = single.convert_gt(frame)
         class_counts.update(names.tolist())
         ignored_counts.update(gt_audit["ignored_types"])
@@ -549,8 +659,35 @@ def main() -> None:
                 continue
             lidar_coordinate_frame = manifest.get(
                 "lidar_coordinate_frames", {}).get(sequence, "ego")
-            infos, audit = convert_sequence(
-                frames, out_root, args, lidar_coordinate_frame)
+            cache_path = (
+                out_root / ".sequence_cache" / split /
+                "{}.pkl".format(sequence))
+            signature = sequence_cache_signature(
+                args, split, sequence, scenario, alignment, len(frames),
+                lidar_coordinate_frame)
+            if args.resume_sequence_cache and cache_path.is_file():
+                with cache_path.open("rb") as stream:
+                    cached = pickle.load(stream)
+                if cached.get("signature") != signature:
+                    raise ValueError(
+                        "sequence cache signature mismatch for {}; use a new "
+                        "output root or remove only this stale cache".format(
+                            cache_path))
+                infos, audit = cached["infos"], cached["audit"]
+                validate_cached_infos(infos, audit, out_root, cache_path)
+                print("Reused sequence cache: {} ({} infos)".format(
+                    cache_path, len(infos)))
+            else:
+                infos, audit = convert_sequence(
+                    frames, out_root, args, lidar_coordinate_frame)
+                if args.resume_sequence_cache:
+                    atomic_pickle_dump({
+                        "signature": signature,
+                        "infos": infos,
+                        "audit": audit,
+                    }, cache_path)
+                    print("Saved sequence cache: {} ({} infos)".format(
+                        cache_path, len(infos)))
             split_infos.extend(infos)
             sequence_summaries[sequence] = {
                 "scenario": scenario, "alignment": alignment, **audit}
@@ -564,15 +701,15 @@ def main() -> None:
                    "metadata": {**metadata, "split": split,
                                 "sequences": list(manifest[split])}}
         info_path = out_root / "custom_infos_{}_sweep.pkl".format(split)
-        with info_path.open("wb") as stream:
-            pickle.dump(payload, stream, protocol=pickle.HIGHEST_PROTOCOL)
+        atomic_pickle_dump(payload, info_path)
         summary["splits"][split] = {
             "frames": len(split_infos), "sequences": sequence_summaries,
             "info_file": str(info_path),
         }
     summary_name = "dry_run_summary.json" if args.dry_run else "conversion_summary.json"
-    (out_root / summary_name).write_text(
-        json.dumps(summary, indent=2, sort_keys=True) + "\n")
+    atomic_text_dump(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        out_root / summary_name)
     print(json.dumps(summary, indent=2, sort_keys=True))
 
 
