@@ -54,6 +54,11 @@ def parse_args() -> argparse.Namespace:
              "coordinate normalization and ROI cropping. Allowed frames are "
              "audited and omitted; the default remains fail-fast.")
     parser.add_argument(
+        "--reuse-existing-lidar", action="store_true",
+        help="Resume a failed conversion by validating and reusing existing "
+             "cropped LiDAR NPY files. Disabled by default so a normal run "
+             "always regenerates LiDAR from the source PCD.")
+    parser.add_argument(
         "--point-cloud-range", type=float, nargs=6,
         default=(0.0, -20.0, -3.0, 50.0, 20.0, 3.0),
         metavar=("X_MIN", "Y_MIN", "Z_MIN", "X_MAX", "Y_MAX", "Z_MAX"),
@@ -261,8 +266,38 @@ def roi_mask(points: np.ndarray, point_cloud_range: Sequence[float]) -> np.ndarr
 def convert_result_lidar(frame, out_root: Path,
                          point_cloud_range: Sequence[float],
                          coordinate_frame: str = "ego",
-                         allow_empty: bool = False
+                         allow_empty: bool = False,
+                         reuse_existing: bool = False
                          ) -> Tuple[Optional[Path], Dict]:
+    output = out_root / "lidar" / (frame.sample_id + ".npy")
+    if reuse_existing and output.is_file():
+        points = np.load(output, allow_pickle=False)
+        if points.ndim != 2 or points.shape[1] != 5 or not len(points):
+            raise ValueError(
+                "existing LiDAR output {} must have non-empty shape [N, 5]; "
+                "got {}".format(output, points.shape))
+        if not np.isfinite(points[:, :3]).all():
+            raise ValueError(
+                "existing LiDAR output {} contains non-finite xyz".format(
+                    output))
+        if not roi_mask(points, point_cloud_range).all():
+            raise ValueError(
+                "existing LiDAR output {} contains points outside ROI".format(
+                    output))
+        xyz = points[:, :3]
+        return output.resolve(), {
+            "source_points": None,
+            "coordinate_frame": coordinate_frame,
+            "cropped_points": len(points),
+            "cropped_ratio": None,
+            "source_xyz_min": None,
+            "source_xyz_max": None,
+            "model_xyz_min": xyz.min(axis=0).tolist(),
+            "model_xyz_max": xyz.max(axis=0).tolist(),
+            "xyz_min": xyz.min(axis=0).tolist(),
+            "xyz_max": xyz.max(axis=0).tolist(),
+            "reused_existing": True,
+        }
     fields = single.read_binary_compressed_pcd(frame.lidar_path)
     required = {"x", "y", "z", "intensity"}
     if set(fields) != required:
@@ -313,7 +348,6 @@ def convert_result_lidar(frame, out_root: Path,
                 source_xyz.max(axis=0).tolist() if len(source_xyz) else None))
     if not len(points):
         return None, audit
-    output = out_root / "lidar" / (frame.sample_id + ".npy")
     output.parent.mkdir(parents=True, exist_ok=True)
     np.save(output, points)
     return output.resolve(), audit
@@ -331,7 +365,7 @@ def convert_sequence(frames: Sequence, out_root: Path, args,
             frame, out_root, args.jpeg_quality, args.skip_undistort)
         lidar, lidar_audit = convert_result_lidar(
             frame, out_root, args.point_cloud_range, lidar_coordinate_frame,
-            allow_empty=True)
+            allow_empty=True, reuse_existing=args.reuse_existing_lidar)
         if lidar is None:
             empty_lidar_frames.append({
                 "sample_id": frame.sample_id,

@@ -102,3 +102,24 @@ def test_empty_result_lidar_can_be_audited_without_output(tmp_path):
     assert audit["source_points"] == 1
     assert audit["cropped_points"] == 0
     assert audit["xyz_min"] is None
+
+
+def test_existing_result_lidar_is_validated_and_reused(tmp_path):
+    converter = load_collection_converter()
+    output = tmp_path / "lidar" / "sequence-000002.npy"
+    output.parent.mkdir()
+    expected = np.asarray([[1.0, 2.0, 3.0, 4.0, 0.0]], dtype=np.float32)
+    np.save(output, expected)
+    frame = type("Frame", (), {
+        "lidar_path": Path("source-must-not-be-read.pcd"),
+        "sample_id": "sequence-000002",
+    })()
+    converter.single.read_binary_compressed_pcd = lambda _: (_ for _ in ()).throw(
+        AssertionError("source PCD was unexpectedly read"))
+    actual, audit = converter.convert_result_lidar(
+        frame, tmp_path,
+        (0.0, -10.0, -10.0, 10.0, 10.0, 10.0), "ego",
+        reuse_existing=True)
+    assert actual == output.resolve()
+    assert audit["reused_existing"] is True
+    assert audit["cropped_points"] == 1
