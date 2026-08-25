@@ -61,3 +61,17 @@ def test_summary_reports_threshold_recall():
     summary = module.summarize(records, "nearest_current_m", [1.0, 4.0])
     assert np.isclose(summary["recall"]["within_1.0m"], 1 / 3)
     assert np.isclose(summary["recall"]["within_4.0m"], 2 / 3)
+
+
+def test_range_summary_uses_forward_x_not_radial_distance():
+    module = load_module()
+    records = [{
+        "forward_x_m": 49.0,
+        "range_m": 52.0,
+        "class_name": "car",
+        "source": 1,
+        "nearest_current_m": 0.5,
+    }]
+    summary = module.grouped_summaries(
+        records, "nearest_current_m", [1.0], [0.0, 50.0])
+    assert summary["by_range"]["0.0-50.0m"]["gt_count"] == 1

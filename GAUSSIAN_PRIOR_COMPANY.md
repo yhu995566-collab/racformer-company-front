@@ -5,6 +5,24 @@ remains reproducible while the learned radar prior is introduced.
 
 ## Stage A: geometric feasibility
 
+For the sequence-disjoint 30k delivery, run the complete 50m Train/Val and
+independent Test first:
+
+```bash
+bash run_code/start_company_30k_radar_stage1.sh front50
+```
+
+After the interrupted 350m conversion has completed, the same launcher can
+produce two non-conflicting reports: all classes at 0-200m and car-only at
+0-350m.
+
+```bash
+bash run_code/start_company_30k_radar_stage1.sh front350
+```
+
+Both modes audit every referenced radar path before starting.  The 350m mode
+refuses partial conversion output.
+
 Run current-frame versus four-frame radar candidate recall before training a
 Gaussian. This measures nearest radar-return distance to every GT centre and
 breaks results down by class, source, and range:
@@ -24,6 +42,14 @@ improve recall but create a large tail, the Gaussian head needs explicit
 time-lag conditioning rather than simply concatenating all radar points.
 
 ## Stage B: learned candidate scoring
+
+The 30k 50m experiment trains on Train, selects on Val, and additionally
+reports the frozen independent Test. It defaults to physical GPU 1 and uses
+batched point-MLP updates:
+
+```bash
+bash run_code/start_company_30k_radar_topk.sh
+```
 
 The company-data learned Top-K experiment is deliberately capped at the
 validated 200m range and leaves all completed 350m Q1-Q5 configs untouched:

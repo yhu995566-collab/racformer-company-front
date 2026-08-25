@@ -41,8 +41,11 @@ candidate_scoring_loss = SCORER_MODULE.candidate_scoring_loss
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--processed-root", type=Path, required=True)
+    parser.add_argument("--test-root", type=Path,
+                        help="Optional independent root containing test info")
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--epochs", type=int, default=12)
+    parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--hidden-dim", type=int, default=128)
@@ -214,17 +217,21 @@ def train_epoch(model, optimizer, root, infos, args, device, epoch):
     model.train()
     order = np.random.default_rng(args.seed + epoch).permutation(len(infos))
     totals = defaultdict(float)
-    progress = tqdm(order, desc="Train epoch {}/{}".format(epoch, args.epochs))
-    for info_index in progress:
-        info = infos[int(info_index)]
-        points = collect_radar_features(
-            root, info, args.use_frames, args.point_cloud_range)
-        boxes, _, _ = frame_gt(info, args.point_cloud_range)
-        point_tensor = torch.from_numpy(points).to(device)
-        box_tensor = torch.from_numpy(boxes).to(device)
-        output = model([point_tensor])
+    batches = [order[start:start + args.batch_size]
+               for start in range(0, len(order), args.batch_size)]
+    progress = tqdm(batches, desc="Train epoch {}/{}".format(epoch, args.epochs))
+    for batch_indices in progress:
+        point_tensors, box_tensors = [], []
+        for info_index in batch_indices:
+            info = infos[int(info_index)]
+            points = collect_radar_features(
+                root, info, args.use_frames, args.point_cloud_range)
+            boxes, _, _ = frame_gt(info, args.point_cloud_range)
+            point_tensors.append(torch.from_numpy(points).to(device))
+            box_tensors.append(torch.from_numpy(boxes).to(device))
+        output = model(point_tensors)
         targets = build_box_candidate_targets(
-            output["points"], output["candidate_mask"], [box_tensor],
+            output["points"], output["candidate_mask"], box_tensors,
             target_sigma=args.target_sigma)
         score_loss = candidate_scoring_loss(
             output["objectness_logits"], targets["objectness_targets"],
@@ -242,16 +249,16 @@ def train_epoch(model, optimizer, root, infos, args, device, epoch):
         totals["score_loss"] += float(score_loss.detach())
         totals["offset_loss"] += float(offset_loss.detach())
         progress.set_postfix(loss="{:.4f}".format(float(loss.detach())))
-    return {key: value / max(len(infos), 1) for key, value in totals.items()}
+    return {key: value / max(len(batches), 1) for key, value in totals.items()}
 
 
 @torch.no_grad()
-def evaluate(model, root, infos, args, device):
+def evaluate(model, root, infos, args, device, split_name="val"):
     model.eval()
     records = []
     selection = defaultdict(lambda: defaultdict(float))
     max_k = max(args.topk)
-    for info in tqdm(infos, desc="Evaluate val Top-K"):
+    for info in tqdm(infos, desc="Evaluate {} Top-K".format(split_name)):
         points = collect_radar_features(
             root, info, args.use_frames, args.point_cloud_range)
         boxes, names, sources = frame_gt(info, args.point_cloud_range)
@@ -320,12 +327,12 @@ def evaluate(model, root, infos, args, device):
 
 def main():
     args = parse_args()
-    if args.epochs <= 0 or args.use_frames <= 0:
-        raise ValueError("epochs and use_frames must be positive")
+    if args.epochs <= 0 or args.use_frames <= 0 or args.batch_size <= 0:
+        raise ValueError("epochs, use_frames, and batch_size must be positive")
     if sorted(set(args.topk)) != sorted(args.topk) or min(args.topk) <= 0:
         raise ValueError("topk must contain unique positive values in ascending order")
-    if args.point_cloud_range[3] != 200.0:
-        raise ValueError("stage-2 company experiment is intentionally capped at 200m")
+    if args.point_cloud_range[3] not in (50.0, 200.0, 350.0):
+        raise ValueError("company experiment xmax must be 50m, 200m, or 350m")
     device = torch.device(args.device)
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA requested but unavailable")
@@ -339,12 +346,16 @@ def main():
     args.out_dir.mkdir(parents=True, exist_ok=True)
     train_infos = load_infos(root, "train")
     val_infos = load_infos(root, "val")
+    test_root = args.test_root.resolve() if args.test_root else None
+    test_infos = load_infos(test_root, "test") if test_root else []
     if args.max_train_frames is not None:
         train_infos = train_infos[:args.max_train_frames]
     if args.max_val_frames is not None:
         val_infos = val_infos[:args.max_val_frames]
     print("train frames: {}".format(len(train_infos)), flush=True)
     print("val frames: {}".format(len(val_infos)), flush=True)
+    if test_root:
+        print("independent test frames: {}".format(len(test_infos)), flush=True)
     print("device: {}".format(device), flush=True)
 
     model = RadarCandidateScorer(
@@ -362,7 +373,9 @@ def main():
         print("epoch {}: {}".format(epoch, json.dumps(epoch_metrics,
                                                        sort_keys=True)), flush=True)
 
-    checkpoint_path = args.out_dir / "radar_candidate_scorer_200m.pth"
+    range_tag = int(args.point_cloud_range[3])
+    checkpoint_path = args.out_dir / "radar_candidate_scorer_{}m.pth".format(
+        range_tag)
     torch.save({
         "state_dict": {key: value.detach().cpu()
                        for key, value in model.state_dict().items()},
@@ -370,13 +383,20 @@ def main():
         "history": history,
     }, checkpoint_path)
     records, metrics, selection = evaluate(
-        model, root, val_infos, args, device)
+        model, root, val_infos, args, device, split_name="val")
+    test_records, test_metrics, test_selection = ([], {}, {})
+    if test_root:
+        test_records, test_metrics, test_selection = evaluate(
+            model, test_root, test_infos, args, device, split_name="test")
     summary = {
-        "experiment": "company_radar_learned_topk_200m",
+        "experiment": "company_radar_learned_topk_{}m".format(range_tag),
         "processed_root": str(root),
         "train_frames": len(train_infos),
         "val_frames": len(val_infos),
         "val_gt_count": len(records),
+        "test_root": None if test_root is None else str(test_root),
+        "test_frames": len(test_infos),
+        "test_gt_count": len(test_records),
         "point_cloud_range": list(args.point_cloud_range),
         "use_frames": args.use_frames,
         "topk": list(args.topk),
@@ -385,6 +405,8 @@ def main():
         "history": history,
         "selection": selection,
         "metrics": metrics,
+        "test_selection": test_selection,
+        "test_metrics": test_metrics,
         "checkpoint": str(checkpoint_path.resolve()),
     }
     summary_path = args.out_dir / "company_radar_topk_summary.json"
@@ -395,10 +417,19 @@ def main():
         writer = csv.DictWriter(stream, fieldnames=list(records[0]))
         writer.writeheader()
         writer.writerows(records)
+    test_records_path = None
+    if test_records:
+        test_records_path = args.out_dir / "company_radar_topk_test_records.csv"
+        with test_records_path.open("w", newline="") as stream:
+            writer = csv.DictWriter(stream, fieldnames=list(test_records[0]))
+            writer.writeheader()
+            writer.writerows(test_records)
 
     print("checkpoint: {}".format(checkpoint_path.resolve()), flush=True)
     print("summary: {}".format(summary_path.resolve()), flush=True)
     print("records: {}".format(records_path.resolve()), flush=True)
+    if test_records_path:
+        print("test records: {}".format(test_records_path.resolve()), flush=True)
     compact = {
         name: value["overall"] for name, value in metrics.items()
         if name == "all_candidates" or name.startswith("mlp_top")

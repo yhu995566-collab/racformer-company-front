@@ -22,8 +22,10 @@ def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--processed-root", type=Path, required=True)
     parser.add_argument("--out-dir", type=Path, required=True)
-    parser.add_argument("--split", choices=("all", "train", "val"),
+    parser.add_argument("--split", choices=("all", "train", "val", "test"),
                         default="all")
+    parser.add_argument("--class-names", nargs="+",
+                        help="Optional reliable GT classes to include")
     parser.add_argument("--use-frames", type=int, default=4,
                         help="Current radar frame plus previous sweeps")
     parser.add_argument("--point-cloud-range", type=float, nargs=6,
@@ -146,7 +148,7 @@ def grouped_summaries(records, distance_key, thresholds, range_bins):
     for low, high in zip(range_bins[:-1], range_bins[1:]):
         selected = [
             record for record in records
-            if low <= record["range_m"] < high
+            if low <= record["forward_x_m"] < high
         ]
         range_groups["{}-{}m".format(low, high)] = summarize(
             selected, distance_key, thresholds)
@@ -176,6 +178,8 @@ def main():
         names = np.asarray(info["gt_names"], dtype=object)
         sources = np.asarray(info.get("gt_sources", np.full(len(boxes), -1)))
         gt_valid = roi_mask(boxes[:, :3], pc)
+        if args.class_names:
+            gt_valid &= np.isin(names, np.asarray(args.class_names, dtype=object))
         boxes, names, sources = boxes[gt_valid], names[gt_valid], sources[gt_valid]
         current, temporal, frame_count = collect_radar(
             root, info, args.use_frames, pc)
@@ -195,6 +199,7 @@ def main():
                 "source": int(sources[index]),
                 "x": float(box[0]),
                 "y": float(box[1]),
+                "forward_x_m": float(box[0]),
                 "range_m": float(np.linalg.norm(box[:2])),
                 "nearest_current_m": float(current_distance[index]),
                 "nearest_temporal_m": float(temporal_distance[index]),
@@ -217,6 +222,7 @@ def main():
         "use_frames": args.use_frames,
         "point_cloud_range": list(args.point_cloud_range),
         "thresholds_m": list(args.thresholds),
+        "class_names": args.class_names,
         "candidate_counts_per_frame": candidate_stats,
         "current_frame": grouped_summaries(
             records, "nearest_current_m", args.thresholds, args.range_bins),
@@ -229,7 +235,7 @@ def main():
     records_path = args.out_dir / "company_radar_candidate_recall_records.csv"
     with records_path.open("w", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=list(records[0]) if records else [
-            "token", "class_name", "source", "x", "y", "range_m",
+            "token", "class_name", "source", "x", "y", "forward_x_m", "range_m",
             "nearest_current_m", "nearest_temporal_m"])
         writer.writeheader()
         writer.writerows(records)

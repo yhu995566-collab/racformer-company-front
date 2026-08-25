@@ -75,25 +75,35 @@ def test_cpu_smoke_trains_and_reports_all_baselines(tmp_path):
         with (processed / "custom_infos_{}_sweep.pkl".format(split)).open("wb") as f:
             pickle.dump({"infos": [make_info(token, radar_path)
                                     for token in tokens]}, f)
+    test_root = tmp_path / "test_processed"
+    test_root.mkdir()
+    with (test_root / "custom_infos_test_sweep.pkl").open("wb") as f:
+        pickle.dump({"infos": [make_info(3, radar_path)]}, f)
 
     output = tmp_path / "output"
     subprocess.run([
         sys.executable, str(SCRIPT),
         "--processed-root", str(processed),
+        "--test-root", str(test_root),
         "--out-dir", str(output),
         "--device", "cpu",
         "--epochs", "1",
         "--hidden-dim", "8",
         "--embedding-dim", "8",
         "--topk", "2", "4",
+        "--point-cloud-range", "0", "-20", "-3", "50", "20", "3",
+        "--range-bins", "0", "25", "50",
     ], cwd=ROOT, check=True, capture_output=True, text=True)
     summary = json.loads((output / "company_radar_topk_summary.json").read_text())
     assert summary["train_frames"] == 2
     assert summary["val_frames"] == 1
-    assert summary["point_cloud_range"][3] == 200.0
+    assert summary["point_cloud_range"][3] == 50.0
+    assert summary["test_frames"] == 1
     assert "all_candidates" in summary["metrics"]
     assert "random_top2" in summary["metrics"]
     assert "rcs_top2" in summary["metrics"]
     assert "mlp_top2" in summary["metrics"]
     assert "mlp_top2_corrected" in summary["metrics"]
-    assert (output / "radar_candidate_scorer_200m.pth").is_file()
+    assert "mlp_top2_corrected" in summary["test_metrics"]
+    assert (output / "radar_candidate_scorer_50m.pth").is_file()
+    assert (output / "company_radar_topk_test_records.csv").is_file()
