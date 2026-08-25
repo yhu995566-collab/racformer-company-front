@@ -105,6 +105,37 @@ def test_empty_result_lidar_can_be_audited_without_output(tmp_path):
     assert audit["xyz_min"] is None
 
 
+def test_empty_result_lidar_can_be_kept_for_detection_training(tmp_path):
+    converter = load_collection_converter()
+    fields = {
+        "x": np.asarray([100.0], dtype=np.float32),
+        "y": np.asarray([100.0], dtype=np.float32),
+        "z": np.asarray([100.0], dtype=np.float32),
+        "intensity": np.asarray([7.0], dtype=np.float32),
+    }
+    converter.single.read_binary_compressed_pcd = lambda _: fields
+    frame = type("Frame", (), {
+        "lidar_path": Path("empty.pcd"),
+        "sample_id": "sequence-000003",
+    })()
+    output, audit = converter.convert_result_lidar(
+        frame, tmp_path,
+        (0.0, -10.0, -10.0, 10.0, 10.0, 10.0), "ego",
+        allow_empty=True, keep_empty=True)
+    assert np.load(output).shape == (0, 5)
+    assert audit["cropped_points"] == 0
+
+    converter.single.read_binary_compressed_pcd = lambda _: (_ for _ in ()).throw(
+        AssertionError("source PCD was unexpectedly read"))
+    reused, reused_audit = converter.convert_result_lidar(
+        frame, tmp_path,
+        (0.0, -10.0, -10.0, 10.0, 10.0, 10.0), "ego",
+        reuse_existing=True, keep_empty=True)
+    assert reused == output
+    assert reused_audit["reused_existing"] is True
+    assert reused_audit["cropped_points"] == 0
+
+
 def test_existing_result_lidar_is_validated_and_reused(tmp_path):
     converter = load_collection_converter()
     output = tmp_path / "lidar" / "sequence-000002.npy"

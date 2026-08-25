@@ -60,6 +60,11 @@ def parse_args() -> argparse.Namespace:
              "cropped LiDAR NPY files. Disabled by default so a normal run "
              "always regenerates LiDAR from the source PCD.")
     parser.add_argument(
+        "--keep-empty-lidar", action="store_true",
+        help="Keep camera/radar/GT keyframes whose cropped LiDAR is empty by "
+             "writing a valid [0, 5] array. Such frames contribute no depth "
+             "supervision but remain usable for detection training.")
+    parser.add_argument(
         "--reuse-existing-radar", action="store_true",
         help="Validate and reuse existing cropped radar NPY files while "
              "reading only source PLY headers for synchronization metadata.")
@@ -353,15 +358,18 @@ def convert_result_lidar(frame, out_root: Path,
                          point_cloud_range: Sequence[float],
                          coordinate_frame: str = "ego",
                          allow_empty: bool = False,
-                         reuse_existing: bool = False
+                         reuse_existing: bool = False,
+                         keep_empty: bool = False,
                          ) -> Tuple[Optional[Path], Dict]:
     output = out_root / "lidar" / (frame.sample_id + ".npy")
     if reuse_existing and output.is_file():
         points = np.load(output, allow_pickle=False)
-        if points.ndim != 2 or points.shape[1] != 5 or not len(points):
+        if (points.ndim != 2 or points.shape[1] != 5 or
+                (not len(points) and not keep_empty)):
             raise ValueError(
-                "existing LiDAR output {} must have non-empty shape [N, 5]; "
-                "got {}".format(output, points.shape))
+                "existing LiDAR output {} must have shape [N, 5]{}; got {}".
+                format(output, " with N > 0" if not keep_empty else "",
+                       points.shape))
         if not np.isfinite(points[:, :3]).all():
             raise ValueError(
                 "existing LiDAR output {} contains non-finite xyz".format(
@@ -378,10 +386,10 @@ def convert_result_lidar(frame, out_root: Path,
             "cropped_ratio": None,
             "source_xyz_min": None,
             "source_xyz_max": None,
-            "model_xyz_min": xyz.min(axis=0).tolist(),
-            "model_xyz_max": xyz.max(axis=0).tolist(),
-            "xyz_min": xyz.min(axis=0).tolist(),
-            "xyz_max": xyz.max(axis=0).tolist(),
+            "model_xyz_min": xyz.min(axis=0).tolist() if len(xyz) else None,
+            "model_xyz_max": xyz.max(axis=0).tolist() if len(xyz) else None,
+            "xyz_min": xyz.min(axis=0).tolist() if len(xyz) else None,
+            "xyz_max": xyz.max(axis=0).tolist() if len(xyz) else None,
             "reused_existing": True,
         }
     fields = single.read_binary_compressed_pcd(frame.lidar_path)
@@ -433,7 +441,11 @@ def convert_result_lidar(frame, out_root: Path,
                 source_xyz.min(axis=0).tolist() if len(source_xyz) else None,
                 source_xyz.max(axis=0).tolist() if len(source_xyz) else None))
     if not len(points):
-        return None, audit
+        if not keep_empty:
+            return None, audit
+        output.parent.mkdir(parents=True, exist_ok=True)
+        np.save(output, points)
+        return output.resolve(), audit
     output.parent.mkdir(parents=True, exist_ok=True)
     np.save(output, points)
     return output.resolve(), audit
@@ -451,14 +463,17 @@ def convert_sequence(frames: Sequence, out_root: Path, args,
             frame, out_root, args.jpeg_quality, args.skip_undistort)
         lidar, lidar_audit = convert_result_lidar(
             frame, out_root, args.point_cloud_range, lidar_coordinate_frame,
-            allow_empty=True, reuse_existing=args.reuse_existing_lidar)
-        if lidar is None:
+            allow_empty=True, reuse_existing=args.reuse_existing_lidar,
+            keep_empty=args.keep_empty_lidar)
+        lidar_is_empty = lidar_audit["cropped_points"] == 0
+        if lidar_is_empty:
             empty_lidar_frames.append({
                 "sample_id": frame.sample_id,
                 "lidar_path": str(frame.lidar_path),
                 "lidar_audit": lidar_audit,
             })
-            if len(empty_lidar_frames) > args.max_empty_lidar_frames:
+            if (not args.keep_empty_lidar and
+                    len(empty_lidar_frames) > args.max_empty_lidar_frames):
                 raise ValueError(
                     "{} exceeds --max-empty-lidar-frames={}; latest={}".
                     format(frame.sample_id.rsplit("-", 1)[0],
@@ -600,7 +615,12 @@ def convert_sequence(frames: Sequence, out_root: Path, args,
         })
     return infos, {
         "source_frames": len(frames), "frames": len(infos),
-        "dropped_keyframes_empty_lidar": len(empty_lidar_frames),
+        "empty_lidar_policy": "keep" if args.keep_empty_lidar else "drop",
+        "empty_lidar_frames": len(empty_lidar_frames),
+        "kept_keyframes_empty_lidar": (
+            len(empty_lidar_frames) if args.keep_empty_lidar else 0),
+        "dropped_keyframes_empty_lidar": (
+            0 if args.keep_empty_lidar else len(empty_lidar_frames)),
         "empty_lidar_examples": empty_lidar_frames[:20],
         "dropped_keyframes_radar_timestamp": len(dropped_keyframes),
         "dropped_keyframe_examples": dropped_keyframes[:20],
@@ -674,6 +694,17 @@ def main() -> None:
                         "output root or remove only this stale cache".format(
                             cache_path))
                 infos, audit = cached["infos"], cached["audit"]
+                requested_empty_policy = (
+                    "keep" if args.keep_empty_lidar else "drop")
+                cached_empty_policy = audit.get("empty_lidar_policy", "drop")
+                if (audit.get("empty_lidar_frames", 0) and
+                        cached_empty_policy != requested_empty_policy):
+                    raise ValueError(
+                        "sequence cache {} used empty-LiDAR policy {!r}, but "
+                        "this run requested {!r}; remove only this cache to "
+                        "rebuild the affected sequence".format(
+                            cache_path, cached_empty_policy,
+                            requested_empty_policy))
                 validate_cached_infos(infos, audit, out_root, cache_path)
                 print("Reused sequence cache: {} ({} infos)".format(
                     cache_path, len(infos)))
