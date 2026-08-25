@@ -13,8 +13,9 @@ The rendered image contains:
 - a small frame/radar/detection status line.
 
 Radar points use the same near-red, middle-yellow, far-blue distance colors as
-the repository visualization. Predictions default to score threshold 0.3 and
-class-wise rotated BEV NMS IoU 0.2.
+the repository visualization. They default to a 2-pixel radius and 0.45 alpha;
+both values are configurable through `racformer_vis_config_t`. Predictions
+default to score threshold 0.3 and class-wise rotated BEV NMS IoU 0.2.
 
 ## Trigger ownership
 

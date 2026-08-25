@@ -84,6 +84,8 @@ typedef struct {
     float class_nms_iou_threshold; /* default 0.2; <=0 disables */
     uint32_t max_pending_frames; /* default 16 */
     uint32_t jpeg_quality;       /* default 90 */
+    uint32_t radar_point_radius; /* default 2 pixels */
+    float radar_point_alpha;     /* default 0.45; range (0, 1] */
     uint8_t draw_radar;
     uint8_t draw_labels;
 } racformer_vis_config_t;

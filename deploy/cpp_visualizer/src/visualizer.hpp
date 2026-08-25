@@ -23,6 +23,8 @@ struct Config {
     float nms_iou_threshold{0.2F};
     uint32_t max_pending{16};
     uint32_t jpeg_quality{90};
+    uint32_t radar_point_radius{2};
+    float radar_point_alpha{0.45F};
     bool draw_radar{true};
     bool draw_labels{true};
 };

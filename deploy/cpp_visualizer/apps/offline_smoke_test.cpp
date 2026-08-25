@@ -173,6 +173,8 @@ int main(int argc, char** argv) {
         config.class_nms_iou_threshold = 0.2F;
         config.max_pending_frames = 4;
         config.jpeg_quality = 90;
+        config.radar_point_radius = 2;
+        config.radar_point_alpha = 0.45F;
         config.draw_radar = 1;
         config.draw_labels = 1;
 

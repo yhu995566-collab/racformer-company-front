@@ -280,16 +280,20 @@ std::vector<uint8_t> Visualizer::render(const Frame& frame, uint32_t* width,
         throw std::runtime_error("camera JPEG must decode to 640x480");
 
     if (config_.draw_radar) {
+        cv::Mat radar_overlay = image.clone();
         for (const auto& raw : frame.radar.points) {
             const EgoPoint ego = transform(config_.radar_to_ego, raw);
             if (ego.x < 0.0F || ego.x > config_.forward_range ||
                 std::abs(ego.y) > config_.lateral_range) continue;
             const Projected projected = project(config_.ego_to_image, ego);
             if (projected.valid)
-                cv::circle(image, projected.pixel, 3,
+                cv::circle(radar_overlay, projected.pixel,
+                           static_cast<int>(config_.radar_point_radius),
                            distance_color(ego.x, config_.forward_range),
                            cv::FILLED, cv::LINE_AA);
         }
+        cv::addWeighted(radar_overlay, config_.radar_point_alpha, image,
+                        1.0F - config_.radar_point_alpha, 0.0, image);
     }
 
     const auto boxes = select_boxes(frame.predictions.boxes, config_);

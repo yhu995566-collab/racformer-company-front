@@ -34,6 +34,10 @@ racformer_vis::Config convert(const racformer_vis_config_t& source) {
         ? source.max_pending_frames : 16;
     result.jpeg_quality = source.jpeg_quality
         ? std::min<uint32_t>(source.jpeg_quality, 100) : 90;
+    result.radar_point_radius = source.radar_point_radius
+        ? std::clamp<uint32_t>(source.radar_point_radius, 1, 10) : 2;
+    result.radar_point_alpha = source.radar_point_alpha > 0.0F
+        ? std::clamp(source.radar_point_alpha, 0.05F, 1.0F) : 0.45F;
     result.draw_radar = source.draw_radar != 0;
     result.draw_labels = source.draw_labels != 0;
     const bool radar_matrix_empty = std::all_of(
