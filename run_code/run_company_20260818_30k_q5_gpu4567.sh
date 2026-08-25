@@ -16,6 +16,7 @@ GPU_COUNT=${#GPU_LIST[@]}
 TARGET_GLOBAL_BATCH=${COMPANY_30K_Q5_GLOBAL_BATCH:-4}
 TRAIN_LR=${COMPANY_30K_Q5_TRAIN_LR:-4e-4}
 WAIT_FOR_50M=${COMPANY_30K_Q5_WAIT_FOR_50M:-1}
+WORKERS_PER_GPU=${COMPANY_30K_Q5_WORKERS_PER_GPU:-1}
 
 usage() {
     echo "Usage: $0 --background | --run RUN_DIR"
@@ -76,6 +77,10 @@ if [[ $WAIT_FOR_50M != 0 && $WAIT_FOR_50M != 1 ]]; then
     echo "COMPANY_30K_Q5_WAIT_FOR_50M must be 0 or 1" >&2
     exit 2
 fi
+if [[ ! $WORKERS_PER_GPU =~ ^[0-9]+$ ]]; then
+    echo "COMPANY_30K_Q5_WORKERS_PER_GPU must be a non-negative integer" >&2
+    exit 2
+fi
 
 RUN_DIR=$2
 mkdir -p "$RUN_DIR" "$PROCESSED_ROOT"
@@ -89,7 +94,7 @@ for required in "$MANIFEST" "$CONFIG" \
     [[ -f $required ]] || fail "missing required file: $required"
 done
 
-log "queue configured: GPUs=$GPU_IDS gpu_count=$GPU_COUNT effective_global_batch=$TARGET_GLOBAL_BATCH accumulation=$ACCUMULATIVE_ITERS train_lr=$TRAIN_LR wait_for_50m=$WAIT_FOR_50M processed_root=$PROCESSED_ROOT"
+log "queue configured: GPUs=$GPU_IDS gpu_count=$GPU_COUNT effective_global_batch=$TARGET_GLOBAL_BATCH accumulation=$ACCUMULATIVE_ITERS train_lr=$TRAIN_LR workers_per_gpu=$WORKERS_PER_GPU wait_for_50m=$WAIT_FOR_50M processed_root=$PROCESSED_ROOT"
 if [[ $WAIT_FOR_50M == 1 ]]; then
     log "waiting for any active 50m train/val conversion to finish"
     while pgrep -f 'convert_chengtech_20260818_collection.py.*processed_trainval_v1.*--splits train val' >/dev/null; do
@@ -147,7 +152,10 @@ if pgrep -af 'train.py.*3dh_query_company_20260818_30k_q5_f4.py' \
     fail "another 30k Q5 training process is already running"
 fi
 
-TRAIN_OVERRIDES=(batch_size=1 optimizer.lr="$TRAIN_LR")
+TRAIN_OVERRIDES=(
+    batch_size=1
+    data.workers_per_gpu="$WORKERS_PER_GPU"
+    optimizer.lr="$TRAIN_LR")
 if (( ACCUMULATIVE_ITERS > 1 )); then
     TRAIN_OVERRIDES+=(
         optimizer_config.type=GradientCumulativeFp16OptimizerHook
