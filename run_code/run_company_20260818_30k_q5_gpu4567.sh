@@ -13,8 +13,8 @@ GPU_IDS=${COMPANY_30K_Q5_GPU_IDS:-4,5,6,7}
 MASTER_PORT=${COMPANY_30K_Q5_MASTER_PORT:-29915}
 IFS=',' read -r -a GPU_LIST <<< "$GPU_IDS"
 GPU_COUNT=${#GPU_LIST[@]}
-TRAIN_LR=${COMPANY_30K_Q5_TRAIN_LR:-$(
-    awk -v count="$GPU_COUNT" 'BEGIN {printf "%.10g", 4e-4 * count / 4}')}
+TARGET_GLOBAL_BATCH=${COMPANY_30K_Q5_GLOBAL_BATCH:-4}
+TRAIN_LR=${COMPANY_30K_Q5_TRAIN_LR:-4e-4}
 
 usage() {
     echo "Usage: $0 --background | --run RUN_DIR"
@@ -65,6 +65,12 @@ for gpu in "${GPU_LIST[@]}"; do
     }
     SEEN_GPUS[$gpu]=1
 done
+if (( TARGET_GLOBAL_BATCH < GPU_COUNT ||
+      TARGET_GLOBAL_BATCH % GPU_COUNT != 0 )); then
+    echo "global batch $TARGET_GLOBAL_BATCH must be a positive multiple of GPU count $GPU_COUNT" >&2
+    exit 2
+fi
+ACCUMULATIVE_ITERS=$((TARGET_GLOBAL_BATCH / GPU_COUNT))
 
 RUN_DIR=$2
 mkdir -p "$RUN_DIR" "$PROCESSED_ROOT"
@@ -78,7 +84,7 @@ for required in "$MANIFEST" "$CONFIG" \
     [[ -f $required ]] || fail "missing required file: $required"
 done
 
-log "queue configured: GPUs=$GPU_IDS gpu_count=$GPU_COUNT train_lr=$TRAIN_LR processed_root=$PROCESSED_ROOT"
+log "queue configured: GPUs=$GPU_IDS gpu_count=$GPU_COUNT effective_global_batch=$TARGET_GLOBAL_BATCH accumulation=$ACCUMULATIVE_ITERS train_lr=$TRAIN_LR processed_root=$PROCESSED_ROOT"
 log "waiting for any active 50m train/val conversion to finish"
 while pgrep -f 'convert_chengtech_20260818_collection.py.*processed_trainval_v1.*--splits train val' >/dev/null; do
     sleep 30
@@ -132,10 +138,15 @@ if pgrep -af 'train.py.*3dh_query_company_20260818_30k_q5_f4.py' \
     fail "another 30k Q5 training process is already running"
 fi
 
-log "starting 36-epoch Q5 training; physical GPUs=$GPU_IDS global_batch=$GPU_COUNT lr=$TRAIN_LR"
+TRAIN_OVERRIDES=(batch_size=1 optimizer.lr="$TRAIN_LR")
+if (( ACCUMULATIVE_ITERS > 1 )); then
+    TRAIN_OVERRIDES+=(
+        optimizer_config.type=GradientCumulativeFp16OptimizerHook
+        optimizer_config.cumulative_iters="$ACCUMULATIVE_ITERS")
+fi
+log "starting 36-epoch Q5 training; physical GPUs=$GPU_IDS effective_global_batch=$TARGET_GLOBAL_BATCH accumulation=$ACCUMULATIVE_ITERS lr=$TRAIN_LR"
 if torchrun --nproc_per_node="$GPU_COUNT" --master_port="$MASTER_PORT" \
-        train.py --config "$CONFIG" --override \
-        batch_size=1 optimizer.lr="$TRAIN_LR" \
+        train.py --config "$CONFIG" --override "${TRAIN_OVERRIDES[@]}" \
         > "$RUN_DIR/train_q5.log" 2>&1; then
     touch "$RUN_DIR/TRAINING_DONE"
     log "Q5 training completed successfully"
