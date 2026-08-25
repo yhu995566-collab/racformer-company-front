@@ -11,6 +11,10 @@ MANIFEST=data_splits/company_20260818_30k_v2.json
 CONFIG=configs/3dh_query_company_20260818_30k_q5_f4.py
 GPU_IDS=${COMPANY_30K_Q5_GPU_IDS:-4,5,6,7}
 MASTER_PORT=${COMPANY_30K_Q5_MASTER_PORT:-29915}
+IFS=',' read -r -a GPU_LIST <<< "$GPU_IDS"
+GPU_COUNT=${#GPU_LIST[@]}
+TRAIN_LR=${COMPANY_30K_Q5_TRAIN_LR:-$(
+    awk -v count="$GPU_COUNT" 'BEGIN {printf "%.10g", 4e-4 * count / 4}')}
 
 usage() {
     echo "Usage: $0 --background | --run RUN_DIR"
@@ -45,6 +49,23 @@ if [[ ${1:-} != "--run" || -z ${2:-} ]]; then
     exit 2
 fi
 
+if (( GPU_COUNT < 1 )); then
+    echo "COMPANY_30K_Q5_GPU_IDS must contain at least one GPU" >&2
+    exit 2
+fi
+declare -A SEEN_GPUS=()
+for gpu in "${GPU_LIST[@]}"; do
+    [[ $gpu =~ ^[0-9]+$ ]] || {
+        echo "invalid GPU ID in COMPANY_30K_Q5_GPU_IDS: $gpu" >&2
+        exit 2
+    }
+    [[ -z ${SEEN_GPUS[$gpu]+x} ]] || {
+        echo "duplicate GPU ID in COMPANY_30K_Q5_GPU_IDS: $gpu" >&2
+        exit 2
+    }
+    SEEN_GPUS[$gpu]=1
+done
+
 RUN_DIR=$2
 mkdir -p "$RUN_DIR" "$PROCESSED_ROOT"
 exec 9>"$RUN_ROOT/queue.lock"
@@ -57,7 +78,7 @@ for required in "$MANIFEST" "$CONFIG" \
     [[ -f $required ]] || fail "missing required file: $required"
 done
 
-log "queue configured: GPUs=$GPU_IDS processed_root=$PROCESSED_ROOT"
+log "queue configured: GPUs=$GPU_IDS gpu_count=$GPU_COUNT train_lr=$TRAIN_LR processed_root=$PROCESSED_ROOT"
 log "waiting for any active 50m train/val conversion to finish"
 while pgrep -f 'convert_chengtech_20260818_collection.py.*processed_trainval_v1.*--splits train val' >/dev/null; do
     sleep 30
@@ -73,6 +94,7 @@ if python -u tools/convert_chengtech_20260818_collection.py \
         --num-sweeps 3 \
         --point-cloud-range 0 -20 -3 350 20 3 \
         --max-empty-lidar-frames 32 \
+        --keep-empty-lidar \
         --reuse-existing-lidar \
         --reuse-existing-radar \
         --resume-sequence-cache \
@@ -96,11 +118,11 @@ export NCCL_P2P_DISABLE=${NCCL_P2P_DISABLE:-1}
 export NCCL_IB_DISABLE=${NCCL_IB_DISABLE:-1}
 export NCCL_DEBUG=${NCCL_DEBUG:-WARN}
 
-log "starting four-GPU NCCL preflight with P2P_DISABLE=$NCCL_P2P_DISABLE IB_DISABLE=$NCCL_IB_DISABLE"
-if torchrun --nproc_per_node=4 --master_port=$((MASTER_PORT - 1)) \
+log "starting $GPU_COUNT-GPU NCCL preflight with P2P_DISABLE=$NCCL_P2P_DISABLE IB_DISABLE=$NCCL_IB_DISABLE"
+if torchrun --nproc_per_node="$GPU_COUNT" --master_port=$((MASTER_PORT - 1)) \
         tools/test_nccl_collectives.py > "$RUN_DIR/nccl_test.log" 2>&1; then
     touch "$RUN_DIR/NCCL_TEST_DONE"
-    log "four-GPU NCCL preflight passed"
+    log "$GPU_COUNT-GPU NCCL preflight passed"
 else
     fail "NCCL preflight failed; training was not started"
 fi
@@ -110,9 +132,10 @@ if pgrep -af 'train.py.*3dh_query_company_20260818_30k_q5_f4.py' \
     fail "another 30k Q5 training process is already running"
 fi
 
-log "starting 36-epoch Q5 training; physical GPUs=$GPU_IDS global_batch=4"
-if torchrun --nproc_per_node=4 --master_port="$MASTER_PORT" \
-        train.py --config "$CONFIG" --override batch_size=1 \
+log "starting 36-epoch Q5 training; physical GPUs=$GPU_IDS global_batch=$GPU_COUNT lr=$TRAIN_LR"
+if torchrun --nproc_per_node="$GPU_COUNT" --master_port="$MASTER_PORT" \
+        train.py --config "$CONFIG" --override \
+        batch_size=1 optimizer.lr="$TRAIN_LR" \
         > "$RUN_DIR/train_q5.log" 2>&1; then
     touch "$RUN_DIR/TRAINING_DONE"
     log "Q5 training completed successfully"
