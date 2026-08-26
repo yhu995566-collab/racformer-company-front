@@ -27,6 +27,12 @@ if num_frames not in (1, 4):
     raise ValueError('RACFORMER_TUNE_NUM_FRAMES must be 1 or 4')
 num_sweeps = num_frames - 1
 rand_flip = _env_bool('RACFORMER_TUNE_RAND_FLIP', False)
+horizontal_fov_deg = float(_os.environ.get(
+    'RACFORMER_TUNE_HORIZONTAL_FOV_DEG', '0'))
+if horizontal_fov_deg <= 0:
+    horizontal_fov_deg = None
+elif horizontal_fov_deg >= 180:
+    raise ValueError('RACFORMER_TUNE_HORIZONTAL_FOV_DEG must be < 180')
 total_epochs = int(_os.environ.get('RACFORMER_TUNE_EPOCHS', '12'))
 eval_interval = int(_os.environ.get('RACFORMER_TUNE_EVAL_INTERVAL', '2'))
 learning_rate = float(_os.environ.get('RACFORMER_TUNE_LR', '4e-4'))
@@ -66,7 +72,8 @@ train_pipeline = [
          roi=point_cloud_range),
     dict(type='LoadCompanyLidarPoints', load_dim=5, use_dim=5,
          roi=point_cloud_range),
-    dict(type='FrontViewFilter', roi=point_cloud_range),
+    dict(type='FrontViewFilter', roi=point_cloud_range,
+         horizontal_fov_deg=horizontal_fov_deg),
     dict(type='ObjectNameFilter', classes=class_names),
     dict(type='RandomTransformImage', ida_aug_conf=ida_aug_conf, training=True),
     dict(type='PointToMultiViewDepth', downsample=1, grid_config=grid_config,
@@ -87,7 +94,8 @@ test_pipeline = [
          roi=point_cloud_range),
     dict(type='LoadCompanyLidarPoints', load_dim=5, use_dim=5,
          roi=point_cloud_range),
-    dict(type='FrontViewFilter', roi=point_cloud_range),
+    dict(type='FrontViewFilter', roi=point_cloud_range,
+         horizontal_fov_deg=horizontal_fov_deg),
     dict(type='RandomTransformImage', ida_aug_conf=ida_aug_conf, training=False),
     dict(type='PointToMultiViewDepth', downsample=1, grid_config=grid_config,
          num_cams=1),
@@ -109,6 +117,8 @@ test_pipeline = [
 model = dict(pts_bbox_head=dict(
     num_classes=len(class_names),
     code_weights=code_weights,
+    query_init_mode=('front_fov_grid' if horizontal_fov_deg else 'front_grid'),
+    horizontal_fov_deg=(horizontal_fov_deg or 120.0),
     transformer=dict(num_frames=num_frames, num_classes=len(class_names)),
     bbox_coder=dict(num_classes=len(class_names)),
     loss_bbox=dict(type='L1Loss', loss_weight=bbox_loss_weight)),
@@ -119,15 +129,18 @@ data = dict(
     train=dict(data_root=dataset_root,
                ann_file=dataset_root + 'custom_infos_train_sweep.pkl',
                pipeline=train_pipeline, classes=class_names,
-               num_sweeps=num_sweeps),
+               num_sweeps=num_sweeps,
+               horizontal_fov_deg=horizontal_fov_deg),
     val=dict(data_root=dataset_root,
              ann_file=dataset_root + 'custom_infos_val_sweep.pkl',
              pipeline=test_pipeline, classes=class_names,
-             num_sweeps=num_sweeps),
+             num_sweeps=num_sweeps,
+             horizontal_fov_deg=horizontal_fov_deg),
     test=dict(data_root=test_root,
               ann_file=test_root + 'custom_infos_test_sweep.pkl',
               pipeline=test_pipeline, classes=class_names,
-              num_sweeps=num_sweeps))
+              num_sweeps=num_sweeps,
+              horizontal_fov_deg=horizontal_fov_deg))
 
 optimizer = dict(lr=learning_rate)
 checkpoint_config = dict(interval=eval_interval, max_keep_ckpts=1,

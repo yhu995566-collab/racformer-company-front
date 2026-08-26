@@ -15,6 +15,8 @@ from PIL import Image
 from matplotlib.lines import Line2D
 from mmcv.ops import nms_rotated
 
+from fov_geometry import front_fov_mask, validate_horizontal_fov
+
 from visualize_company_alignment import (
     draw_bev_boxes,
     draw_image_boxes,
@@ -49,6 +51,9 @@ def parse_args():
     parser.add_argument("--max-radar-points", type=int, default=15000)
     parser.add_argument("--bev-forward-range", type=float, default=200.0)
     parser.add_argument("--bev-lateral-range", type=float, default=20.0)
+    parser.add_argument(
+        "--horizontal-fov-deg", type=float,
+        help="Filter radar, GT, and predictions to a front horizontal FOV.")
     return parser.parse_args()
 
 
@@ -99,12 +104,23 @@ def render(info, result, output_path, args, class_names, data_root):
         (radar[:, 0] >= 0.0) &
         (radar[:, 0] <= args.bev_forward_range) &
         (np.abs(radar[:, 1]) <= args.bev_lateral_range)]
+    if args.horizontal_fov_deg is not None:
+        radar = radar[front_fov_mask(
+            radar[:, :2], args.horizontal_fov_deg)]
     radar = subsample(radar, args.max_radar_points)
 
     gt_boxes = np.asarray(info.get("gt_boxes", []), dtype=np.float32).reshape(-1, 7)
     gt_names = np.asarray(info.get("gt_names", []))
+    if args.horizontal_fov_deg is not None and len(gt_boxes):
+        gt_keep = front_fov_mask(gt_boxes[:, :2], args.horizontal_fov_deg)
+        gt_boxes, gt_names = gt_boxes[gt_keep], gt_names[gt_keep]
     pred_boxes, pred_scores, pred_labels = prediction_fields(
         result, args.score_threshold, args.nms_iou_threshold)
+    if args.horizontal_fov_deg is not None and len(pred_boxes):
+        pred_keep = front_fov_mask(pred_boxes[:, :2], args.horizontal_fov_deg)
+        pred_boxes = pred_boxes[pred_keep]
+        pred_scores = pred_scores[pred_keep]
+        pred_labels = pred_labels[pred_keep]
     pred_names = np.asarray([
         f"{class_names[label] if label < len(class_names) else label} {score:.2f}"
         for label, score in zip(pred_labels, pred_scores)
@@ -162,6 +178,7 @@ def render(info, result, output_path, args, class_names, data_root):
 
 def main():
     args = parse_args()
+    validate_horizontal_fov(args.horizontal_fov_deg)
     with args.ann_file.open("rb") as handle:
         payload = pickle.load(handle)
     infos = payload["infos"] if isinstance(payload, dict) else payload

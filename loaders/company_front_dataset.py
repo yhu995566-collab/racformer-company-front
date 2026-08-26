@@ -9,6 +9,8 @@ from mmdet.core.evaluation.mean_ap import average_precision
 from mmdet3d.core.bbox import LiDARInstance3DBoxes
 from mmdet3d.datasets import Custom3DDataset
 
+from fov_geometry import front_fov_mask, validate_horizontal_fov
+
 
 @DATASETS.register_module()
 class CompanyFrontDataset(Custom3DDataset):
@@ -22,6 +24,7 @@ class CompanyFrontDataset(Custom3DDataset):
                  num_sweeps=7,
                  point_cloud_range=(0, -20, -3, 200, 20, 3),
                  evaluation_distance_ranges=((0, 50), (50, 100), (100, 200)),
+                 horizontal_fov_deg=None,
                  **kwargs):
         self.camera_key = camera_key
         self.radar_key = radar_key
@@ -36,6 +39,7 @@ class CompanyFrontDataset(Custom3DDataset):
                in self.evaluation_distance_ranges):
             raise ValueError(
                 'evaluation_distance_ranges must contain valid ranges')
+        self.horizontal_fov_deg = validate_horizontal_fov(horizontal_fov_deg)
         super().__init__(**kwargs)
 
     def load_annotations(self, ann_file):
@@ -199,7 +203,7 @@ class CompanyFrontDataset(Custom3DDataset):
         boxes2 = boxes2.to(device)
         return LiDARInstance3DBoxes.overlaps(boxes1, boxes2).detach().cpu()
 
-    def _filtered_gt(self, index):
+    def _filtered_gt(self, index, horizontal_fov_deg=None):
         ann = self.get_ann_info(index)
         boxes = ann['gt_bboxes_3d']
         labels = ann['gt_labels_3d']
@@ -211,7 +215,27 @@ class CompanyFrontDataset(Custom3DDataset):
             (centers[:, 0] >= roi[0]) & (centers[:, 0] <= roi[3]) &
             (centers[:, 1] >= roi[1]) & (centers[:, 1] <= roi[4]) &
             (centers[:, 2] >= roi[2]) & (centers[:, 2] <= roi[5]))
+        if horizontal_fov_deg is not None:
+            mask &= front_fov_mask(centers[:, :2], horizontal_fov_deg)
         return boxes[mask], labels[mask.cpu().numpy()]
+
+    @staticmethod
+    def _filter_fov(items, horizontal_fov_deg, with_scores):
+        if horizontal_fov_deg is None:
+            return items
+        filtered = []
+        for item in items:
+            boxes = item[0]
+            centers = boxes.gravity_center[:, :2]
+            mask = front_fov_mask(centers, horizontal_fov_deg)
+            box_mask = mask.to(boxes.tensor.device)
+            mask_np = mask.detach().cpu().numpy()
+            if with_scores:
+                filtered.append(
+                    (boxes[box_mask], item[1][mask_np], item[2][mask_np]))
+            else:
+                filtered.append((boxes[box_mask], item[1][mask_np]))
+        return filtered
 
     def _evaluate_class(self, predictions, ground_truth, class_id,
                         iou_fn, iou_threshold, score_threshold):
@@ -370,7 +394,8 @@ class CompanyFrontDataset(Custom3DDataset):
     def evaluate(self, results, metric=None, logger=None,
                  bev_iou_threshold=0.5, iou_3d_threshold=0.5,
                  score_threshold=0.1, nms_iou_threshold=0.2,
-                 eval_classes=None, metric_prefix='company', **kwargs):
+                 eval_classes=None, metric_prefix='company',
+                 horizontal_fov_deg=None, filter_gt_by_fov=True, **kwargs):
         """Evaluate front-view detections with class-wise BEV and 3D AP."""
         if len(results) != len(self):
             raise ValueError(
@@ -394,10 +419,17 @@ class CompanyFrontDataset(Custom3DDataset):
             for class_name in eval_classes]
         metric_prefix = metric_prefix.rstrip('/')
 
+        evaluation_fov = (
+            self.horizontal_fov_deg if horizontal_fov_deg is None
+            else validate_horizontal_fov(horizontal_fov_deg))
         predictions = [
             self._result_fields(result, nms_iou_threshold)
             for result in results]
-        ground_truth = [self._filtered_gt(index) for index in range(len(self))]
+        predictions = self._filter_fov(
+            predictions, evaluation_fov, with_scores=True)
+        gt_fov = evaluation_fov if filter_gt_by_fov else None
+        ground_truth = [
+            self._filtered_gt(index, gt_fov) for index in range(len(self))]
         metrics = {}
         bev_aps = []
         iou_3d_aps = []

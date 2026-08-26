@@ -3,6 +3,8 @@ import numpy as np
 from mmdet.datasets.builder import PIPELINES
 from mmdet3d.core.points import get_points_type
 
+from fov_geometry import front_fov_mask, validate_horizontal_fov
+
 
 def _load_float_points(path, load_dim):
     if path.endswith('.npy'):
@@ -124,22 +126,30 @@ class LoadCompanyRadarSweeps:
 class FrontViewFilter:
     """Apply one front ROI consistently to LiDAR, radar, and GT boxes."""
 
-    def __init__(self, roi=(0, -20, -3, 200, 20, 3)):
+    def __init__(self, roi=(0, -20, -3, 200, 20, 3),
+                 horizontal_fov_deg=None):
         self.roi = roi
+        self.horizontal_fov_deg = validate_horizontal_fov(horizontal_fov_deg)
+
+    def _mask(self, xyz):
+        mask = _roi_mask(xyz, self.roi)
+        if self.horizontal_fov_deg is not None:
+            mask &= front_fov_mask(xyz[..., :2], self.horizontal_fov_deg)
+        return mask
 
     def __call__(self, results):
         if 'points' in results:
-            mask = _roi_mask(results['points'].tensor, self.roi)
+            mask = self._mask(results['points'].tensor)
             results['points'] = results['points'][mask]
         if 'radar_points' in results:
             filtered = []
             for points in results['radar_points']:
-                mask = _roi_mask(points.tensor, self.roi)
+                mask = self._mask(points.tensor)
                 filtered.append(points[mask])
             results['radar_points'] = filtered
         if 'gt_bboxes_3d' in results:
             centers = results['gt_bboxes_3d'].gravity_center
-            mask = _roi_mask(centers, self.roi)
+            mask = self._mask(centers)
             results['gt_bboxes_3d'] = results['gt_bboxes_3d'][mask]
             mask_np = mask.cpu().numpy()
             for key in ('gt_labels_3d', 'gt_names_3d'):

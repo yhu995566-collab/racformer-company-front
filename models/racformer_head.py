@@ -8,7 +8,8 @@ from mmdet.models.dense_heads import DETRHead
 from mmdet3d.core.bbox.coders import build_bbox_coder
 from mmdet3d.core.bbox.structures.lidar_box3d import LiDARInstance3DBoxes
 from .bbox.utils import normalize_bbox, encode_bbox, theta_d2xy_coods, xy2theta_d_coods
-from .query_initialization import generate_front_grid_points
+from .query_initialization import (
+    generate_front_fov_grid_points, generate_front_grid_points)
 from .utils import VERSION
 
 @HEADS.register_module()
@@ -22,6 +23,7 @@ class RaCFormer_head(DETRHead):
                  num_clusters=5,
                  query_init_mode='polar',
                  query_distance_power=1.0,
+                 horizontal_fov_deg=120.0,
                  polar_radius=65.0,
                  bbox_coder=None,
                  code_size=10,
@@ -44,6 +46,7 @@ class RaCFormer_head(DETRHead):
         if query_distance_power < 1.0:
             raise ValueError('query_distance_power must be >= 1.0')
         self.query_distance_power = float(query_distance_power)
+        self.horizontal_fov_deg = float(horizontal_fov_deg)
         if polar_radius <= 0:
             raise ValueError('polar_radius must be positive')
         self.polar_radius = float(polar_radius)
@@ -98,6 +101,13 @@ class RaCFormer_head(DETRHead):
         if self.query_init_mode == 'front_grid':
             xy = generate_front_grid_points(
                 self.num_clusters, num_angles, self.query_distance_power)
+            return xy2theta_d_coods(
+                xy, self.pc_range, r=self.polar_radius)[..., :2]
+
+        if self.query_init_mode == 'front_fov_grid':
+            xy = generate_front_fov_grid_points(
+                self.num_clusters, num_angles, self.pc_range,
+                self.horizontal_fov_deg, self.query_distance_power)
             return xy2theta_d_coods(
                 xy, self.pc_range, r=self.polar_radius)[..., :2]
 

@@ -23,6 +23,7 @@ Profiles:
   proxy_main3_f4_z         no flip, stronger cz/height and bbox loss
   proxy_main3_f4_lr_half   no flip, lr=2e-4
   proxy_main3_f4_lr_double no flip, lr=8e-4
+  proxy_main3_f4_fov120    main3, 4 frames, 120-degree physical FOV
 EOF
 }
 
@@ -35,6 +36,7 @@ set_profile() {
     export RACFORMER_TUNE_LR=4e-4
     export RACFORMER_TUNE_BBOX_LOSS_WEIGHT=0.25
     export RACFORMER_TUNE_CODE_WEIGHTS=2,2,1,1,1,1,1,1,1,1
+    export RACFORMER_TUNE_HORIZONTAL_FOV_DEG=0
     case "$1" in
         overfit_car_f1_noflip)
             export RACFORMER_TUNE_CLASSES=car
@@ -66,6 +68,9 @@ set_profile() {
             ;;
         proxy_main3_f4_lr_double)
             export RACFORMER_TUNE_LR=8e-4
+            ;;
+        proxy_main3_f4_fov120)
+            export RACFORMER_TUNE_HORIZONTAL_FOV_DEG=120
             ;;
         *) echo "unknown profile: $1" >&2; usage; exit 2 ;;
     esac
