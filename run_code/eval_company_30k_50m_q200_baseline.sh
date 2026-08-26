@@ -21,6 +21,9 @@ CUDA_VISIBLE_DEVICES="$GPU" python val.py \
     --config "$CONFIG" --weights "$WEIGHTS" --split test --batch_size 1 \
     --eval-profiles car_only main3 --out "$RUN_DIR/predictions.pkl" \
     2>&1 | tee "$RUN_DIR/eval.log"
+touch "$RUN_DIR/EVALUATION_DONE"
+grep -E 'company/(car_only|main3)/' "$RUN_DIR/eval.log" \
+    > "$RUN_DIR/metrics_summary.txt"
 
 CUDA_VISIBLE_DEVICES="$GPU" python tools/audit_company_prediction_geometry.py \
     --config "$CONFIG" --split test \
@@ -29,6 +32,7 @@ CUDA_VISIBLE_DEVICES="$GPU" python tools/audit_company_prediction_geometry.py \
     --classes car truck bicycle --score-threshold 0.1 \
     --output "$RUN_DIR/geometry_audit.json" \
     2>&1 | tee "$RUN_DIR/geometry_audit.log"
+touch "$RUN_DIR/GEOMETRY_AUDIT_DONE"
 
 CUDA_VISIBLE_DEVICES="$GPU" python tools/visualize_company_predictions.py \
     --ann-file "$TEST_ROOT/custom_infos_test_sweep.pkl" \
@@ -36,8 +40,6 @@ CUDA_VISIBLE_DEVICES="$GPU" python tools/visualize_company_predictions.py \
     --output-dir "$RUN_DIR/visualizations" --num-samples 100 \
     --score-threshold 0.1 --bev-forward-range 50 \
     2>&1 | tee "$RUN_DIR/visualize.log"
-
-grep -E 'company/(car_only|main3)/' "$RUN_DIR/eval.log" \
-    > "$RUN_DIR/metrics_summary.txt"
+touch "$RUN_DIR/VISUALIZATION_DONE"
 touch "$RUN_DIR/ALL_DONE"
 echo "baseline evaluation complete: $RUN_DIR"

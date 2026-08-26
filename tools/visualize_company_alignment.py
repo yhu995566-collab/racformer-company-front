@@ -77,6 +77,16 @@ def subsample(points, maximum):
 
 
 def lidar2img(cam_info):
+    # New company conversion payloads store the calibrated projection matrix
+    # directly.  Older payloads store sensor-to-LiDAR extrinsics and require
+    # reconstruction below.
+    if "lidar2img" in cam_info:
+        projection = np.asarray(cam_info["lidar2img"], dtype=np.float32)
+        if projection.shape != (4, 4):
+            raise ValueError(
+                "lidar2img must have shape (4, 4), got {}".format(
+                    projection.shape))
+        return projection
     sensor2lidar_r = np.asarray(
         cam_info["sensor2lidar_rotation"], dtype=np.float32)
     sensor2lidar_t = np.asarray(
