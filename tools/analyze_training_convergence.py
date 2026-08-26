@@ -13,7 +13,8 @@ EPOCH_RE = re.compile(
     r'(?P<body>.*)')
 VALUE_RE = re.compile(
     r'(?P<key>[A-Za-z0-9_.]+): '
-    r'(?P<value>[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)')
+    r'(?P<value>[-+]?(?:(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?|'
+    r'inf|nan))', re.IGNORECASE)
 METRIC_RE = re.compile(
     r'(?P<key>company/[A-Za-z0-9_./@-]+): '
     r'(?P<value>[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)')
@@ -72,8 +73,7 @@ def parse_log(path):
             }
             if iteration >= max(1, int(total * 0.8)):
                 losses[current_epoch].append(values)
-            lowered = line.lower()
-            if 'nan' in lowered or 'inf' in lowered:
+            if any(not math.isfinite(value) for value in values.values()):
                 nonfinite_lines.append(line_number)
             continue
         metric_match = METRIC_RE.search(line)
@@ -115,13 +115,12 @@ def classify(eval_points, loss_points, patience, min_delta):
     if len(eval_points) < max(4, patience + 1):
         return 'NOT_ENOUGH_EVALS', '至少需要{}次验证'.format(
             max(4, patience + 1))
-    running_best = -float('inf')
+    significant_best = -float('inf')
     last_significant_index = 0
     for index, (_, value) in enumerate(eval_points):
-        if value > running_best + min_delta:
-            running_best = value
+        if value > significant_best + min_delta:
+            significant_best = value
             last_significant_index = index
-        running_best = max(running_best, value)
     stale = len(eval_points) - 1 - last_significant_index
     best_epoch, best_value = max(eval_points, key=lambda item: item[1])
     last_epoch, last_value = eval_points[-1]
