@@ -14,6 +14,9 @@ from mmdet3d.datasets import build_dataset
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', required=True)
+    parser.add_argument(
+        '--allow-no-empty', action='store_true',
+        help='Allow curated subsets that contain no empty-LiDAR sample.')
     return parser.parse_args()
 
 
@@ -39,7 +42,7 @@ def main():
             regular_indices.append(index)
         if len(regular_indices) >= 8 and empty_index is not None:
             break
-    if not regular_indices or empty_index is None:
+    if not regular_indices or (empty_index is None and not args.allow_no_empty):
         raise RuntimeError(
             'training set must contain regular and empty-LiDAR samples')
 
@@ -58,9 +61,9 @@ def main():
         raise RuntimeError(
             'none of the regular LiDAR samples produced depth supervision')
 
-    empty_sample = dataset[empty_index]
-    checks = [('regular', regular[0], regular[1], regular[2]),
-              ('empty', empty_index, empty_sample, None)]
+    checks = [('regular', regular[0], regular[1], regular[2])]
+    if empty_index is not None:
+        checks.append(('empty', empty_index, dataset[empty_index], None))
     for label, index, sample, known_depth in checks:
         if sample is None:
             raise RuntimeError('{} sample {} was filtered'.format(label, index))

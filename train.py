@@ -21,6 +21,9 @@ from os import path as osp
 def main():
     parser = argparse.ArgumentParser(description="Train a detector")
     parser.add_argument("--config", required=True)
+    parser.add_argument(
+        "--work-dir",
+        help="Optional isolated output directory for logs and checkpoints")
     parser.add_argument("--override", nargs="+", action=DictAction)
     parser.add_argument("--local_rank", type=int, default=0)
     parser.add_argument("--world_size", type=int, default=1)
@@ -69,8 +72,10 @@ def main():
             if run_name == "":
                 run_name = datetime.now().strftime("%Y-%m-%d/%H-%M-%S")
             cfgs.work_dir = osp.join(osp.splitext(osp.basename(args.config))[0])
-            # work_dir = os.path.join('outputs', cfgs.model.type, run_name)
-            work_dir = os.path.join("outputs", cfgs.work_dir, run_name)
+            if args.work_dir is not None:
+                work_dir = osp.abspath(args.work_dir)
+            else:
+                work_dir = os.path.join("outputs", cfgs.work_dir, run_name)
             if os.path.exists(work_dir):  # must be an empty dir
                 if input('Path "%s" already exists, overwrite it? [Y/n] ' % work_dir) == "n":
                     print("Bye.")
