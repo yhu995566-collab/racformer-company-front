@@ -24,6 +24,8 @@ Profiles:
   proxy_main3_f4_lr_half   no flip, lr=2e-4
   proxy_main3_f4_lr_double no flip, lr=8e-4
   proxy_main3_f4_fov120    main3, 4 frames, 120-degree physical FOV
+  full_main3_f4_fov120_p15_e8
+                           full train set, FOV120, distance power 1.5, 8 epochs
 EOF
 }
 
@@ -37,6 +39,7 @@ set_profile() {
     export RACFORMER_TUNE_BBOX_LOSS_WEIGHT=0.25
     export RACFORMER_TUNE_CODE_WEIGHTS=2,2,1,1,1,1,1,1,1,1
     export RACFORMER_TUNE_HORIZONTAL_FOV_DEG=0
+    export RACFORMER_TUNE_QUERY_DISTANCE_POWER=1.0
     case "$1" in
         overfit_car_f1_noflip)
             export RACFORMER_TUNE_CLASSES=car
@@ -71,6 +74,11 @@ set_profile() {
             ;;
         proxy_main3_f4_fov120)
             export RACFORMER_TUNE_HORIZONTAL_FOV_DEG=120
+            ;;
+        full_main3_f4_fov120_p15_e8)
+            export RACFORMER_TUNE_HORIZONTAL_FOV_DEG=120
+            export RACFORMER_TUNE_QUERY_DISTANCE_POWER=1.5
+            export RACFORMER_TUNE_EPOCHS=8
             ;;
         *) echo "unknown profile: $1" >&2; usage; exit 2 ;;
     esac
@@ -139,8 +147,12 @@ done
 set_profile "$PROFILE"
 IFS=',' read -r -a GPU_LIST <<< "$GPU_IDS"
 GPU_COUNT=${#GPU_LIST[@]}
-(( GPU_COUNT == 2 )) || { echo "tuning launcher requires exactly two GPUs" >&2; exit 2; }
-CUMULATIVE_ITERS=2
+case "$GPU_COUNT" in
+    1) CUMULATIVE_ITERS=4 ;;
+    2) CUMULATIVE_ITERS=2 ;;
+    4) CUMULATIVE_ITERS=1 ;;
+    *) echo "tuning launcher requires 1, 2, or 4 GPUs" >&2; exit 2 ;;
+esac
 RUN_DIR="$RESULT_ROOT/$PROFILE/$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$RUN_DIR"
 mkdir -p "$RESULT_ROOT/$PROFILE"
@@ -158,7 +170,7 @@ export PROFILE
 export TUNING_LOCK="$RESULT_ROOT/tuning.lock"
 export -p | grep -E 'RACFORMER_|CUDA_VISIBLE_DEVICES|GPU_COUNT|MASTER_PORT|WORKERS_PER_GPU|CUMULATIVE_ITERS|NCCL_|OMP_NUM_THREADS|MKL_NUM_THREADS|OPENBLAS_NUM_THREADS|PROFILE' \
     > "$RUN_DIR/environment.sh"
-nohup bash "$SCRIPT_PATH" --run "$RUN_DIR" \
+setsid bash "$SCRIPT_PATH" --run "$RUN_DIR" \
     > "$RUN_DIR/nohup.log" 2>&1 < /dev/null &
 echo $! > "$RUN_DIR/pid"
 echo "tuning run started: $PROFILE"

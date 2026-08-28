@@ -36,6 +36,10 @@ elif horizontal_fov_deg >= 180:
 total_epochs = int(_os.environ.get('RACFORMER_TUNE_EPOCHS', '12'))
 eval_interval = int(_os.environ.get('RACFORMER_TUNE_EVAL_INTERVAL', '2'))
 learning_rate = float(_os.environ.get('RACFORMER_TUNE_LR', '4e-4'))
+query_distance_power = float(_os.environ.get(
+    'RACFORMER_TUNE_QUERY_DISTANCE_POWER', '1.0'))
+if query_distance_power < 1.0:
+    raise ValueError('RACFORMER_TUNE_QUERY_DISTANCE_POWER must be >= 1.0')
 bbox_loss_weight = float(_os.environ.get(
     'RACFORMER_TUNE_BBOX_LOSS_WEIGHT', '0.25'))
 code_weights = [float(value) for value in _os.environ.get(
@@ -117,6 +121,7 @@ test_pipeline = [
 model = dict(pts_bbox_head=dict(
     num_classes=len(class_names),
     code_weights=code_weights,
+    query_distance_power=query_distance_power,
     query_init_mode=('front_fov_grid' if horizontal_fov_deg else 'front_grid'),
     horizontal_fov_deg=(horizontal_fov_deg or 120.0),
     transformer=dict(num_frames=num_frames, num_classes=len(class_names)),
@@ -146,6 +151,9 @@ optimizer = dict(lr=learning_rate)
 checkpoint_config = dict(interval=eval_interval, max_keep_ckpts=1,
                          save_last=True)
 eval_config = dict(interval=eval_interval,
-                   save_best='company/car_3D_AP@0.5', rule='greater')
+                   save_best=('company/car_3D_AP@0.5'
+                              if class_names == ['car']
+                              else 'company/3D_mAP@0.5'),
+                   rule='greater')
 evaluation_profiles = ['car_only'] if class_names == ['car'] else ['car_only', 'main3']
 evaluation_output_dir = 'outputs/racformer_company_50m_q200_tune/evaluation/'
