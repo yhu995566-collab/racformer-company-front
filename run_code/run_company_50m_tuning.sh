@@ -105,7 +105,10 @@ if [[ ${1:-} == --run ]]; then
         [[ -s $path ]] || { echo "missing required file: $path"; exit 3; }
     done
     log "resolving config for profile=$PROFILE GPUs=$CUDA_VISIBLE_DEVICES"
-    python -c "from mmcv import Config; c=Config.fromfile('$CONFIG'); open('$RUN_DIR/resolved_config.py','w').write(c.pretty_text)"
+    # MMCV 1.6 calls yapf.FormatCode(..., verify=True), but recent YAPF
+    # releases removed that argument.  Dump the resolved ConfigDict directly
+    # so experiment startup does not depend on the installed YAPF version.
+    python -c "from mmcv import Config; from pprint import pformat; c=Config.fromfile('$CONFIG'); open('$RUN_DIR/resolved_config.py','w').write(pformat(c._cfg_dict.to_dict(), width=120, sort_dicts=False) + '\\n')"
     python tools/smoke_company_training_data.py --config "$CONFIG" --allow-no-empty \
         > "$RUN_DIR/data_smoke.log" 2>&1
     log "data smoke passed"
