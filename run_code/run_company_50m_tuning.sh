@@ -10,7 +10,7 @@ TEST_ROOT_DEFAULT=/mnt/diskNvme1/hyh/data/company_20260818_30k_front50_q200_f4/p
 usage() {
     cat <<'EOF'
 Usage:
-  run_company_50m_tuning.sh --profile PROFILE --data-root DIR [--gpus 0,1] [--port 30100] --background
+  run_company_50m_tuning.sh --profile PROFILE --data-root DIR [--train-ann PKL] [--val-ann PKL] [--gpus 0,1] [--port 30100] --background
   run_company_50m_tuning.sh --run RUN_DIR
 
 Profiles:
@@ -26,6 +26,8 @@ Profiles:
   proxy_main3_f4_fov120    main3, 4 frames, 120-degree physical FOV
   full_main3_f4_fov120_p15_e8
                            full train set, FOV120, distance power 1.5, 8 epochs
+  full_main3_f4_fov120_p15_e20
+                           blocked dev split, FOV120, distance power 1.5, 20 epochs
 EOF
 }
 
@@ -40,6 +42,8 @@ set_profile() {
     export RACFORMER_TUNE_CODE_WEIGHTS=2,2,1,1,1,1,1,1,1,1
     export RACFORMER_TUNE_HORIZONTAL_FOV_DEG=0
     export RACFORMER_TUNE_QUERY_DISTANCE_POWER=1.0
+    export RACFORMER_TUNE_CHECKPOINT_INTERVAL=2
+    export RACFORMER_TUNE_MAX_KEEP_CKPTS=1
     case "$1" in
         overfit_car_f1_noflip)
             export RACFORMER_TUNE_CLASSES=car
@@ -80,6 +84,13 @@ set_profile() {
             export RACFORMER_TUNE_QUERY_DISTANCE_POWER=1.5
             export RACFORMER_TUNE_EPOCHS=8
             ;;
+        full_main3_f4_fov120_p15_e20)
+            export RACFORMER_TUNE_HORIZONTAL_FOV_DEG=120
+            export RACFORMER_TUNE_QUERY_DISTANCE_POWER=1.5
+            export RACFORMER_TUNE_EPOCHS=20
+            export RACFORMER_TUNE_CHECKPOINT_INTERVAL=4
+            export RACFORMER_TUNE_MAX_KEEP_CKPTS=4
+            ;;
         *) echo "unknown profile: $1" >&2; usage; exit 2 ;;
     esac
 }
@@ -97,8 +108,8 @@ if [[ ${1:-} == --run ]]; then
     flock -n 8 || { log "FAILED: another tuning run is active"; exit 3; }
     trap 'status=$?; (( status == 0 )) || touch "$RUN_DIR/FAILED"' EXIT
     for path in \
-        "$RACFORMER_TUNE_DATA_ROOT/custom_infos_train_sweep.pkl" \
-        "$RACFORMER_TUNE_DATA_ROOT/custom_infos_val_sweep.pkl" \
+        "$RACFORMER_TUNE_TRAIN_ANN_FILE" \
+        "$RACFORMER_TUNE_VAL_ANN_FILE" \
         "$RACFORMER_COMPANY_TEST_ROOT/custom_infos_test_sweep.pkl" \
         "$CONFIG" \
         pretrain/cascade_mask_rcnn_r50_fpn_coco-20e_20e_nuim_20201009_124951-40963960.pth; do
@@ -129,6 +140,8 @@ fi
 
 PROFILE=
 DATA_ROOT=
+TRAIN_ANN=
+VAL_ANN=
 GPU_IDS=0,1
 MASTER_PORT=30100
 WORKERS_PER_GPU=1
@@ -139,6 +152,8 @@ while (($#)); do
     case "$1" in
         --profile) PROFILE=$2; shift 2 ;;
         --data-root) DATA_ROOT=$2; shift 2 ;;
+        --train-ann) TRAIN_ANN=$2; shift 2 ;;
+        --val-ann) VAL_ANN=$2; shift 2 ;;
         --gpus) GPU_IDS=$2; shift 2 ;;
         --port) MASTER_PORT=$2; shift 2 ;;
         --workers-per-gpu) WORKERS_PER_GPU=$2; shift 2 ;;
@@ -161,6 +176,8 @@ mkdir -p "$RUN_DIR"
 mkdir -p "$RESULT_ROOT/$PROFILE"
 echo "$RUN_DIR" > "$RESULT_ROOT/$PROFILE/latest_run.txt"
 export RACFORMER_TUNE_DATA_ROOT=$(readlink -f "$DATA_ROOT")
+export RACFORMER_TUNE_TRAIN_ANN_FILE=$(readlink -f "${TRAIN_ANN:-$DATA_ROOT/custom_infos_train_sweep.pkl}")
+export RACFORMER_TUNE_VAL_ANN_FILE=$(readlink -f "${VAL_ANN:-$DATA_ROOT/custom_infos_val_sweep.pkl}")
 export RACFORMER_COMPANY_TEST_ROOT=$(readlink -f "$TEST_ROOT")
 export CUDA_VISIBLE_DEVICES=$GPU_IDS
 export GPU_COUNT MASTER_PORT WORKERS_PER_GPU CUMULATIVE_ITERS

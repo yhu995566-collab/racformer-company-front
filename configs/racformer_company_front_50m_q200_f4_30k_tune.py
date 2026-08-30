@@ -35,6 +35,9 @@ elif horizontal_fov_deg >= 180:
     raise ValueError('RACFORMER_TUNE_HORIZONTAL_FOV_DEG must be < 180')
 total_epochs = int(_os.environ.get('RACFORMER_TUNE_EPOCHS', '12'))
 eval_interval = int(_os.environ.get('RACFORMER_TUNE_EVAL_INTERVAL', '2'))
+checkpoint_interval = int(_os.environ.get(
+    'RACFORMER_TUNE_CHECKPOINT_INTERVAL', str(eval_interval)))
+max_keep_ckpts = int(_os.environ.get('RACFORMER_TUNE_MAX_KEEP_CKPTS', '1'))
 learning_rate = float(_os.environ.get('RACFORMER_TUNE_LR', '4e-4'))
 query_distance_power = float(_os.environ.get(
     'RACFORMER_TUNE_QUERY_DISTANCE_POWER', '1.0'))
@@ -55,6 +58,12 @@ test_root = _os.path.abspath(_os.environ.get(
     'RACFORMER_COMPANY_TEST_ROOT',
     '/mnt/diskNvme1/hyh/data/'
     'company_20260818_30k_front50_q200_f4/processed_v3')) + '/'
+train_ann_file = _os.path.abspath(_os.environ.get(
+    'RACFORMER_TUNE_TRAIN_ANN_FILE',
+    dataset_root + 'custom_infos_train_sweep.pkl'))
+val_ann_file = _os.path.abspath(_os.environ.get(
+    'RACFORMER_TUNE_VAL_ANN_FILE',
+    dataset_root + 'custom_infos_val_sweep.pkl'))
 
 point_cloud_range = [0.0, -20.0, -3.0, 50.0, 20.0, 3.0]
 grid_config = {
@@ -132,12 +141,12 @@ model = dict(pts_bbox_head=dict(
 
 data = dict(
     train=dict(data_root=dataset_root,
-               ann_file=dataset_root + 'custom_infos_train_sweep.pkl',
+               ann_file=train_ann_file,
                pipeline=train_pipeline, classes=class_names,
                num_sweeps=num_sweeps,
                horizontal_fov_deg=horizontal_fov_deg),
     val=dict(data_root=dataset_root,
-             ann_file=dataset_root + 'custom_infos_val_sweep.pkl',
+             ann_file=val_ann_file,
              pipeline=test_pipeline, classes=class_names,
              num_sweeps=num_sweeps,
              horizontal_fov_deg=horizontal_fov_deg),
@@ -148,7 +157,8 @@ data = dict(
               horizontal_fov_deg=horizontal_fov_deg))
 
 optimizer = dict(lr=learning_rate)
-checkpoint_config = dict(interval=eval_interval, max_keep_ckpts=1,
+checkpoint_config = dict(interval=checkpoint_interval,
+                         max_keep_ckpts=max_keep_ckpts,
                          save_last=True)
 eval_config = dict(interval=eval_interval,
                    save_best=('company/car_3D_AP@0.5'
