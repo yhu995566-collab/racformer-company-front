@@ -52,6 +52,11 @@ def parse_args():
     parser.add_argument("--bev-forward-range", type=float, default=200.0)
     parser.add_argument("--bev-lateral-range", type=float, default=20.0)
     parser.add_argument(
+        "--classes", nargs="+",
+        help=("Explicit model class order. Also filters ground truth to these "
+              "classes, preventing dataset metadata from mislabeling compact "
+              "class heads."))
+    parser.add_argument(
         "--horizontal-fov-deg", type=float,
         help="Filter radar, GT, and predictions to a front horizontal FOV.")
     return parser.parse_args()
@@ -111,6 +116,9 @@ def render(info, result, output_path, args, class_names, data_root):
 
     gt_boxes = np.asarray(info.get("gt_boxes", []), dtype=np.float32).reshape(-1, 7)
     gt_names = np.asarray(info.get("gt_names", []))
+    if args.classes is not None and len(gt_boxes):
+        gt_keep = np.isin(gt_names, np.asarray(args.classes))
+        gt_boxes, gt_names = gt_boxes[gt_keep], gt_names[gt_keep]
     if args.horizontal_fov_deg is not None and len(gt_boxes):
         gt_keep = front_fov_mask(gt_boxes[:, :2], args.horizontal_fov_deg)
         gt_boxes, gt_names = gt_boxes[gt_keep], gt_names[gt_keep]
@@ -182,8 +190,14 @@ def main():
     with args.ann_file.open("rb") as handle:
         payload = pickle.load(handle)
     infos = payload["infos"] if isinstance(payload, dict) else payload
-    class_names = tuple(payload.get("metadata", {}).get(
-        "classes", DEFAULT_CLASSES)) if isinstance(payload, dict) else DEFAULT_CLASSES
+    if args.classes is not None:
+        if len(set(args.classes)) != len(args.classes):
+            raise ValueError("--classes must not contain duplicates")
+        class_names = tuple(args.classes)
+    else:
+        class_names = tuple(payload.get("metadata", {}).get(
+            "classes", DEFAULT_CLASSES)) \
+            if isinstance(payload, dict) else DEFAULT_CLASSES
     with args.predictions.open("rb") as handle:
         predictions = pickle.load(handle)
     if len(predictions) != len(infos):

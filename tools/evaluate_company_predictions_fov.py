@@ -18,6 +18,7 @@ from fov_geometry import front_fov_mask
 PROFILES = {
     'car_only': ('car',),
     'main3': ('car', 'truck', 'bicycle'),
+    'main4': ('car', 'truck', 'bicycle', 'pedestrian'),
 }
 
 

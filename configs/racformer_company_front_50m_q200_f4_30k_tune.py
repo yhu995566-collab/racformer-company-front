@@ -165,5 +165,10 @@ eval_config = dict(interval=eval_interval,
                               if class_names == ['car']
                               else 'company/3D_mAP@0.5'),
                    rule='greater')
-evaluation_profiles = ['car_only'] if class_names == ['car'] else ['car_only', 'main3']
+if class_names == ['car']:
+    evaluation_profiles = ['car_only']
+elif class_names == ['car', 'truck', 'bicycle', 'pedestrian']:
+    evaluation_profiles = ['car_only', 'main3', 'main4']
+else:
+    evaluation_profiles = ['car_only', 'main3']
 evaluation_output_dir = 'outputs/racformer_company_50m_q200_tune/evaluation/'

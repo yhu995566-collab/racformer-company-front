@@ -22,6 +22,7 @@ COMPANY_EVALUATION_PROFILES = {
     'all': None,
     'car_only': ('car',),
     'main3': ('car', 'truck', 'bicycle'),
+    'main4': ('car', 'truck', 'bicycle', 'pedestrian'),
 }
 
 
