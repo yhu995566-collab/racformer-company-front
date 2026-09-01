@@ -715,6 +715,22 @@ status: FAILED
 下一步检查 `image_feat_2` 的 ONNX producer 与 TensorRT 相邻层，然后选择 identity
 fusion barrier 或 tactic-source 限制实验。
 
+`image_feat_2` 的直接尾部已经确认：
+
+```text
+/Transpose_2_output_0
+  -> ONNX /Transpose_2
+  -> ONNX /Reshape_17
+  -> image_feat_2
+
+TensorRT layer 1712: SHUFFLE /Reshape_17
+```
+
+`Transpose` 与 `Reshape` 不进行浮点算术，因此原始 feature 误差来自
+`/Transpose_2_output_0` 更上游。第一轮图修复在 `/Transpose_2` 的 input 0 前插入
+`racformer_identity` plugin，建立明确 fusion boundary，再重新 parse、build 和做
+decoded validation；若结果不变，再继续沿数据输入向上追踪实际数值 producer。
+
 当前 41/40 数值失败与实机 640×480/约 65.5° 相机不匹配是两个独立问题。
 数值比较的 PyTorch reference 和 TensorRT 都读取同一个由 1920×1080 训练图像生成
 的 640×256 fixture，实机图像没有进入该测试。因此 FOV 不匹配不是 query 34
