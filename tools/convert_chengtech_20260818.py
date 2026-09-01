@@ -28,6 +28,7 @@ CAMERA_DISTORTION = np.asarray([
     -0.1342809090, -0.2376811870, -0.0001393982, 0.0000050977,
     -0.0058570910, 0.2581241099, -0.3799765692, -0.0521208096,
 ], dtype=np.float64)
+CAMERA_IMAGE_SIZE = (1920, 1080)
 
 # Confirmed camera -> vehicle pose, Euler R = Rz(yaw) @ Ry(pitch) @ Rx(roll).
 CAMERA_TRANSLATION = (1.067547570351529, 0.02643990469655807,
@@ -376,7 +377,8 @@ def prepare_image(frame: Frame, out_root: Path, quality: int,
     output.parent.mkdir(parents=True, exist_ok=True)
     if not output.exists():
         image = cv2.imread(str(frame.image_path), cv2.IMREAD_COLOR)
-        if image is None or image.shape[:2] != (1080, 1920):
+        expected_shape = (CAMERA_IMAGE_SIZE[1], CAMERA_IMAGE_SIZE[0])
+        if image is None or image.shape[:2] != expected_shape:
             raise ValueError("unexpected image shape for {}: {}".format(
                 frame.image_path, None if image is None else image.shape))
         rectified = cv2.undistort(

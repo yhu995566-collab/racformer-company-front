@@ -3,6 +3,7 @@ import json
 import pickle
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -34,6 +35,34 @@ def test_modality_frame_ids_may_have_a_fixed_offset():
     converter = load_collection_converter()
     assert converter.contiguous_start({3, 4, 5}, "image", "sequence") == 3
     assert converter.contiguous_start({0, 1, 2}, "lidar", "sequence") == 0
+
+
+def test_camera_can_be_configured_from_vehicle_yaml(tmp_path):
+    converter = load_collection_converter()
+    calibration = tmp_path / "vehicle.yaml"
+    calibration.write_text("""
+sensors:
+  camera:
+    - topic: /front60_camera/compressed
+      time_compensation: 0.04
+      calibration:
+        CameraExt: {x: 1.0, y: 2.0, z: 3.0, roll: 0.1, pitch: 0.2, yaw: 0.3}
+        CameraIntMat: [1000, 0, 960, 0, 1001, 540, 0, 0, 1]
+        DistCoeff: [1, 2, 3, 4, 5, 6, 7, 8]
+        ImageSize: [1920, 1080]
+""")
+    args = SimpleNamespace(
+        sensor_calibration_yaml=calibration,
+        camera_topic="/front60_camera/compressed",
+        camera_directory="front60_camera",
+    )
+    actual = converter.configure_camera(args)
+    assert actual["camera_directory"] == "front60_camera"
+    assert actual["image_size"] == [1920, 1080]
+    assert actual["time_compensation"] == 0.04
+    assert np.allclose(converter.single.CAMERA_K[0], [1000, 0, 960])
+    assert converter.single.CAMERA_IMAGE_SIZE == (1920, 1080)
+    assert np.allclose(converter.single.CAMERA_TRANSLATION, [1, 2, 3])
 
 
 def test_result_lidar_adds_zero_ring_channel(tmp_path):

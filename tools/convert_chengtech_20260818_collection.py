@@ -9,6 +9,7 @@ cross a train/validation/test boundary.
 """
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -81,9 +82,96 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--jpeg-quality", type=int, default=95)
     parser.add_argument("--skip-undistort", action="store_true")
     parser.add_argument(
+        "--camera-directory", default="front120_camera",
+        help="Sequence-local camera directory (default: front120_camera)")
+    parser.add_argument(
+        "--sensor-calibration-yaml", type=Path,
+        help="Vehicle sensor YAML containing the selected camera calibration")
+    parser.add_argument(
+        "--camera-topic", default="/front120_camera/compressed",
+        help="Camera topic to select from --sensor-calibration-yaml")
+    parser.add_argument(
         "--dry-run", action="store_true",
         help="Validate split membership and modality frame IDs without conversion")
     return parser.parse_args()
+
+
+def configure_camera(args: argparse.Namespace) -> Dict:
+    """Configure the shared single-sequence converter for one camera."""
+    if args.sensor_calibration_yaml is None:
+        calibration = {
+            "source": "built_in_front120",
+            "camera_directory": args.camera_directory,
+            "camera_topic": args.camera_topic,
+            "image_size": list(single.CAMERA_IMAGE_SIZE),
+            "intrinsic": single.CAMERA_K.tolist(),
+            "distortion": single.CAMERA_DISTORTION.tolist(),
+            "camera_ext": {
+                "x": single.CAMERA_TRANSLATION[0],
+                "y": single.CAMERA_TRANSLATION[1],
+                "z": single.CAMERA_TRANSLATION[2],
+                "roll": single.CAMERA_RPY[0],
+                "pitch": single.CAMERA_RPY[1],
+                "yaw": single.CAMERA_RPY[2],
+            },
+        }
+    else:
+        try:
+            import yaml
+        except ImportError as error:
+            raise RuntimeError(
+                "PyYAML is required with --sensor-calibration-yaml") from error
+        path = args.sensor_calibration_yaml.resolve()
+        payload = yaml.safe_load(path.read_text())
+        cameras = payload.get("sensors", {}).get("camera", [])
+        matches = [item for item in cameras
+                   if item.get("topic") == args.camera_topic]
+        if len(matches) != 1:
+            raise ValueError(
+                "expected exactly one camera topic {!r} in {}; got {}".format(
+                    args.camera_topic, path,
+                    [item.get("topic") for item in cameras]))
+        raw = matches[0].get("calibration", {})
+        intrinsic = np.asarray(raw.get("CameraIntMat"), dtype=np.float64)
+        distortion = np.asarray(raw.get("DistCoeff"), dtype=np.float64)
+        image_size = tuple(int(value) for value in raw.get("ImageSize", []))
+        camera_ext = raw.get("CameraExt", {})
+        ext_names = ("x", "y", "z", "roll", "pitch", "yaw")
+        if intrinsic.size != 9 or distortion.size not in (4, 5, 8, 12, 14):
+            raise ValueError(
+                "invalid intrinsic/distortion for {} in {}".format(
+                    args.camera_topic, path))
+        if len(image_size) != 2 or any(value <= 0 for value in image_size):
+            raise ValueError("invalid ImageSize for {} in {}".format(
+                args.camera_topic, path))
+        if any(name not in camera_ext for name in ext_names):
+            raise ValueError("CameraExt for {} is incomplete in {}".format(
+                args.camera_topic, path))
+        single.CAMERA_K = intrinsic.reshape(3, 3)
+        single.CAMERA_DISTORTION = distortion.reshape(-1)
+        single.CAMERA_IMAGE_SIZE = image_size
+        single.CAMERA_TRANSLATION = tuple(
+            float(camera_ext[name]) for name in ext_names[:3])
+        single.CAMERA_RPY = tuple(
+            float(camera_ext[name]) for name in ext_names[3:])
+        single.T_CAMERA_TO_VEHICLE = single.euler_transform(
+            single.CAMERA_TRANSLATION, single.CAMERA_RPY)
+        single.T_VEHICLE_TO_CAMERA = np.linalg.inv(
+            single.T_CAMERA_TO_VEHICLE)
+        calibration = {
+            "source": str(path),
+            "source_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "camera_directory": args.camera_directory,
+            "camera_topic": args.camera_topic,
+            "image_size": list(image_size),
+            "intrinsic": single.CAMERA_K.tolist(),
+            "distortion": single.CAMERA_DISTORTION.tolist(),
+            "camera_ext": {name: float(camera_ext[name])
+                           for name in ext_names},
+            "time_compensation": matches[0].get("time_compensation"),
+        }
+    args.camera_calibration = calibration
+    return calibration
 
 
 def _indexed_files(directory: Path, suffix: str) -> Dict[int, Path]:
@@ -170,7 +258,7 @@ def sequence_cache_signature(args, split: str, sequence: str, scenario: str,
                              alignment: Dict, frame_count: int,
                              lidar_coordinate_frame: str) -> Dict:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "split": split,
         "sequence": sequence,
         "scenario": scenario,
@@ -185,6 +273,7 @@ def sequence_cache_signature(args, split: str, sequence: str, scenario: str,
         "jpeg_quality": args.jpeg_quality,
         "skip_undistort": args.skip_undistort,
         "limit_per_sequence": args.limit_per_sequence,
+        "camera_calibration": args.camera_calibration,
     }
 
 
@@ -289,10 +378,11 @@ def contiguous_start(indices, modality: str, sequence: str) -> int:
     return ordered[0]
 
 
-def discover_sequence(data_root: Path, truth_root: Path, sequence: str):
+def discover_sequence(data_root: Path, truth_root: Path, sequence: str,
+                      camera_directory: str = "front120_camera"):
     source = data_root / sequence
     truth, scenario = find_truth_sequence(truth_root, sequence)
-    images = _indexed_files(source / "front120_camera", ".jpeg")
+    images = _indexed_files(source / camera_directory, ".jpeg")
     radars = _indexed_files(source / "radar_front", ".ply")
     labels = _indexed_files(source / "GT", ".json")
     lidar_dir = truth / "result" / "pcd"
@@ -638,6 +728,7 @@ def convert_sequence(frames: Sequence, out_root: Path, args,
 
 def main() -> None:
     args = parse_args()
+    camera_calibration = configure_camera(args)
     if args.num_sweeps < 0:
         raise ValueError("--num-sweeps must be non-negative")
     if args.max_empty_lidar_frames < 0:
@@ -660,15 +751,18 @@ def main() -> None:
         "point_cloud_range": list(args.point_cloud_range),
         "max_radar_gt_delta_ms": args.max_radar_gt_delta_ms,
         "split_manifest": str(args.split_manifest.resolve()),
+        "camera_calibration": camera_calibration,
     }
     summary = {"source_root": str(args.data_root.resolve()),
                "truth_root": str(args.truth_root.resolve()),
-               "output_root": str(out_root), "splits": {}}
+               "output_root": str(out_root),
+               "camera_calibration": camera_calibration, "splits": {}}
     for split in args.splits:
         split_infos, sequence_summaries = [], {}
         for sequence in manifest[split]:
             frames, scenario, alignment = discover_sequence(
-                args.data_root.resolve(), args.truth_root.resolve(), sequence)
+                args.data_root.resolve(), args.truth_root.resolve(), sequence,
+                args.camera_directory)
             if args.limit_per_sequence is not None:
                 frames = frames[:args.limit_per_sequence]
             if args.dry_run:
