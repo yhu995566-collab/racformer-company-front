@@ -349,6 +349,19 @@ parser errors: 0
 zero-dimension execution tensors: 0
 ```
 
+实际 TensorRT 8.5.2.2 parser 结果（2026-09-01）：
+
+```text
+Image/LSS: PASS, parser errors 0, zero-dimension tensors 0,
+           zero-dimension execution tensors 0
+Radar:     PASS, parser errors 0, zero-dimension tensors 15,
+           zero-dimension execution tensors 0
+Decoder:   PASS, parser errors 0, zero-dimension tensors 35,
+           zero-dimension execution tensors 0
+```
+
+Radar 和 Decoder 的零维项目是 shape tensor，不是 execution tensor，不阻止建图。
+
 计划构建的 L20 engine：
 
 ```text
@@ -565,7 +578,8 @@ commit、类别、范围、FOV、Query 数、帧数、精度组合、标定版�
 | PyTorch 静态几何 sample-0 | 正在执行/待确认 |
 | 完整模型静态几何 ONNX | 完成；40/40 decoded boundary 一致，`status: SUCCESS` |
 | frontend/decoder 拆分导出 | 完成；frontend 172 MB、fixture 110 MB、decoder 80 MB，两个 checker/status 均通过 |
-| L20 TRT 8.5 三 engine 构建 | 待执行 |
+| L20 TRT 8.5 三图 parser | 完成；三图 PASS、parser errors 0、zero-dimension execution tensors 0 |
+| L20 TRT 8.5 三 engine 构建 | 待执行；parser 通过不产生 `.engine` 文件 |
 | L20 decoded validation | 待执行 |
 | 本地中转归档 | 待执行 |
 | Nano plugin/engine 重建 | 待执行 |
