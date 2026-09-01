@@ -1,0 +1,55 @@
+_base_ = ['../racformer_company_front_50m_q200_f4_30k_train.py']
+
+# Frozen deployment geometry for the final Main4 FOV experiment.  Do not use
+# the environment-driven tuning config here: an unset environment variable
+# would silently restore the old rectangular query layout.
+num_frames = 4
+num_cams = 1
+horizontal_fov_deg = 120.0
+query_distance_power = 1.5
+class_names = ['car', 'truck', 'bicycle', 'pedestrian']
+
+point_cloud_range = [0.0, -20.0, -3.0, 50.0, 20.0, 3.0]
+ida_aug_conf = {
+    'resize_lim': (0.334, 0.38),
+    'final_dim': (256, 640),
+    'bot_pct_lim': (0.0, 0.0),
+    'rot_lim': (0.0, 0.0),
+    'H': 1080,
+    'W': 1920,
+    'rand_flip': False,
+}
+
+model = dict(pts_bbox_head=dict(
+    num_classes=4,
+    code_weights=[2, 2, 1, 1, 1, 1, 1, 1, 1, 1],
+    query_init_mode='front_fov_grid',
+    query_distance_power=query_distance_power,
+    horizontal_fov_deg=horizontal_fov_deg,
+    transformer=dict(num_frames=num_frames, num_classes=4),
+    bbox_coder=dict(num_classes=4),
+    loss_bbox=dict(type='L1Loss', loss_weight=0.25)))
+
+# Deployment reads synchronized raw frames directly.  The dedicated
+# DeploymentPreprocessor performs deterministic image resize/crop and applies
+# rectangle-intersect-FOV filtering after radar points are in ego coordinates.
+data = dict(
+    val=dict(
+        pipeline=[], classes=class_names, num_sweeps=num_frames - 1,
+        horizontal_fov_deg=horizontal_fov_deg),
+    test=dict(
+        pipeline=[], classes=class_names, num_sweeps=num_frames - 1,
+        horizontal_fov_deg=horizontal_fov_deg))
+
+deployment = dict(
+    camera='left',
+    num_cams=num_cams,
+    num_frames=num_frames,
+    source_image_size=(1920, 1080),
+    network_image_size=(640, 256),
+    horizontal_fov_deg=horizontal_fov_deg,
+    roi_mode='rectangle_fov_intersection',
+    radar_point_fields=['x', 'y', 'z', 'rcs', 'vx', 'vy', 'time_lag'],
+    radar_points_in_ego=True,
+    image_color_order='BGR',
+    image_dtype='uint8')

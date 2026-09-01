@@ -1,5 +1,6 @@
 """Deployment preprocessing equivalent to the company validation pipeline."""
 
+import math
 from typing import Sequence
 
 import numpy as np
@@ -26,6 +27,16 @@ class DeploymentPreprocessor:
         self.depth_max = float(cfg.grid_config['depth'][1])
         self.point_cloud_range = np.asarray(
             cfg.point_cloud_range, dtype=np.float32)
+        horizontal_fov_deg = getattr(cfg, 'horizontal_fov_deg', None)
+        if horizontal_fov_deg is None:
+            self.horizontal_fov_tangent = None
+        else:
+            horizontal_fov_deg = float(horizontal_fov_deg)
+            if not 0.0 < horizontal_fov_deg < 180.0:
+                raise ValueError(
+                    'horizontal_fov_deg must be between 0 and 180 degrees')
+            self.horizontal_fov_tangent = math.tan(math.radians(
+                horizontal_fov_deg * 0.5))
 
         self.resize = max(
             self.final_height / self.source_height,
@@ -77,6 +88,11 @@ class DeploymentPreprocessor:
             (points[:, 0] >= x_min) & (points[:, 0] <= x_max) &
             (points[:, 1] >= y_min) & (points[:, 1] <= y_max) &
             (points[:, 2] >= z_min) & (points[:, 2] <= z_max))
+        if self.horizontal_fov_tangent is not None:
+            keep &= (
+                (points[:, 0] >= 0.0) &
+                (np.abs(points[:, 1]) <=
+                 points[:, 0] * self.horizontal_fov_tangent))
         return points[keep]
 
     def _radar_maps(self, points, lidar2img):
