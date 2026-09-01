@@ -660,6 +660,20 @@ Image features 与 LSS 分组隔离结果：
 feature 输出。下一步逐个放行 `image_feat_0` 至 `image_feat_3`，判断单一尺度错误
 还是多尺度小误差叠加。
 
+逐尺度 decoded 隔离结果：
+
+```text
+image_feat_0: 40/40, boxes max error 0.00483435, SUCCESS
+image_feat_1: 40/40, boxes max error 0.00653982, SUCCESS
+image_feat_2: 41/40, query 34 分叉, FAILED
+image_feat_3: 40/40, labels/scores一致, boxes max error 0.03144479, FAILED
+```
+
+`image_feat_2` 单独完整复现主故障，是主要根因。`image_feat_3` 未改变 detection
+数量、标签或分数，但框最大误差比 3 cm 门限高 1.44 mm，是次要边界问题。
+`image_feat_0/1` 已通过。下一步直接比较 Image FP32 engine 的五个原始输出与
+frontend fixture，量化各 feature 在进入 decoder 前的实际误差。
+
 ## 7. Nano 阶段与最终目录
 
 服务器的 L20 `.engine` 和 x86_64 plugin `.so` 不能传到 Nano 执行。传输路线固定为：
@@ -836,7 +850,7 @@ commit、类别、范围、FOV、Query 数、帧数、精度组合、标定版�
 | frontend/decoder 拆分导出 | 完成；frontend 172 MB、fixture 110 MB、decoder 80 MB，两个 checker/status 均通过 |
 | L20 TRT 8.5 三图 parser | 完成；三图 PASS、parser errors 0、zero-dimension execution tensors 0 |
 | L20 TRT 8.5 三 engine 构建 | 完成；Image FP16 101.26 MB、Radar FP16 9.68 MB、Decoder FP32 80.20 MB |
-| L20 decoded validation | Decoder、Radar、LSS 均通过隔离；失败已定位到 `image_feat_0..3`，正在逐尺度隔离 |
+| L20 decoded validation | 主故障定位到 `image_feat_2`；`image_feat_3` 为 3.144 cm 次要边界误差；`image_feat_0/1` 通过 |
 | 本地中转归档 | 待执行 |
 | Nano plugin/engine 重建 | 待执行 |
 | Nano decoded validation 与测速 | 待执行 |
