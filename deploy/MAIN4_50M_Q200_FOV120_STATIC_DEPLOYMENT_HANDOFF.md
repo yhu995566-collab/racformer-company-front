@@ -7,6 +7,107 @@
 旧的 100m-q300 和早期四帧部署记录仅用于参考，不能与本模型的 ONNX、fixture、
 engine 或 runtime constants 混用。
 
+## 0. 离职交接停止点（必须先读）
+
+截至 2026-09-01，本模型已经完成 `.pth -> ONNX -> 三拆分 ONNX -> L20
+TensorRT 8.5.2 engine` 的完整技术流水线，但**没有得到可接受的完整三 engine
+组合**。不要因为三个 engine 都显示 build `SUCCESS` 就将它们传到 Nano 或作为
+生产交付。
+
+当前最重要结论：
+
+```text
+完整模型 ONNX boundary: 40/40，SUCCESS
+Recurrent decoder FP32 单独验证: 40/40，SUCCESS
+Radar FP32 隔离验证: 40/40，SUCCESS
+LSS FP32 隔离验证: 40/40，SUCCESS
+image_feat_0 隔离: 40/40，SUCCESS
+image_feat_1 隔离: 40/40，SUCCESS
+image_feat_2 隔离: 41/40，FAILED（主要根因）
+image_feat_3 隔离: 40/40，但框最大误差 0.03144479 m，FAILED
+完整全 FP32 链路: 41/40，FAILED
+```
+
+问题已定位为：TensorRT Image frontend 的 `image_feat_2` 细小浮点差异触发
+query 34 在六次 recurrent decoder 中分叉。它不是 Decoder、Radar、LSS、FP16、
+50 m polar radius 或实机相机 FOV 导致的问题。
+
+已经验证无效的路线：
+
+- Image FP16 + Radar FP16 + Decoder FP32：39/40；
+- Image FP16 + Radar FP32 + Decoder FP32：38/40；
+- 全 FP32：41/40；
+- Image FP32 workspace 从 8 GB 改为 1 GB：仍为 41/40；
+- `builder_optimization_level=0`：TRT 8.5.2 API 不支持，未生成 engine；
+- 在 `/Transpose_2` input 0 前插入 identity barrier：仍然失败，位置太靠后。
+
+最后一次 barrier 失败说明：`Transpose -> Reshape -> image_feat_2` 只是输出整形，
+实际数值差异已经在更上游产生。下一位接手者若继续当前 FOV120 模型，应沿
+`/Transpose_2` 的数据输入向上追踪到真正的 convolution/add/norm producer，
+在数值 producer 前建立 barrier，或做 cuDNN tactic-source 对照。不要继续尝试
+2 GB、4 GB workspace，也不要在同一个尾部位置重复插 barrier。
+
+当前服务器产物目录：
+
+```text
+宿主机 ONNX:
+/home/ubuntu/hyh/RaCFormer/outputs/deploy_onnx_50m_q200_fov120_p15_main4_e8_staticgeom
+
+容器 ONNX:
+/workspace/outputs/deploy_onnx_50m_q200_fov120_p15_main4_e8_staticgeom
+
+容器 engine/report:
+/workspace/outputs/deploy_tensorrt_50m_q200_fov120_p15_main4_e8_staticgeom
+```
+
+必须保留的核心文件：
+
+```text
+racformer_50m_q200_fov120_p15_main4_e8_model_sample0.npz
+racformer_50m_q200_fov120_p15_main4_e8_frontend_precompute_sample0.npz
+racformer_50m_q200_fov120_p15_main4_e8_frontend_precompute_v2_trt85.onnx
+racformer_50m_q200_fov120_p15_main4_e8_frontend_image_lss_trt85.onnx
+racformer_50m_q200_fov120_p15_main4_e8_frontend_radar_trt85.onnx
+racformer_50m_q200_fov120_p15_main4_e8_decoder_precompute_v2_trt85.onnx
+racformer_50m_q200_fov120_p15_main4_e8_decoder_precompute_v2_trt852_l20_fp32.engine
+racformer_50m_q200_fov120_p15_main4_e8_frontend_radar_trt852_l20_fp32.engine
+```
+
+必须保留的关键诊断报告：
+
+```text
+validate_main4_all_fp32_trt852_l20.txt
+validate_main4_decoder_only_fp32_trt852_l20.txt
+validate_main4_isolate_image_fp32_actual_radar_fixture.txt
+validate_main4_isolate_radar_fp32_actual_image_fixture.txt
+validate_main4_isolate_image_feats_fp32_actual.txt
+validate_main4_isolate_lss_fp32_actual.txt
+validate_main4_isolate_image_feat_0_fp32_actual.txt
+validate_main4_isolate_image_feat_1_fp32_actual.txt
+validate_main4_isolate_image_feat_2_fp32_actual.txt
+validate_main4_isolate_image_feat_3_fp32_actual.txt
+validate_main4_image_frontend_fp32_raw.txt
+inspect_main4_image_feat_2_trt852.txt
+validate_main4_image_fp32_ws1_radar_fp32_decoder_fp32.txt
+```
+
+另外，当前 `staticgeom` fixture 使用 1920×1080 训练图像和训练标定生成；它不是
+640×480 实机输入验收。C++ runtime 当前把 640×480 JPEG 直接裁掉顶部 224 行，
+与 Python 的 `1920×1080 -> 640×360 -> crop 640×256` 不等价。实机相机水平
+FOV 约 65.5°，当前模型训练 FOV 为 120°。因此即使解决 41/40，当前 artifact
+也只能作为训练视图下的技术基线，不能直接作为最终实机交付。
+
+建议下一位接手者优先级：
+
+1. 若约 60° 新模型已经训练完成，优先为它建立真实 640×480、真实标定的全新
+   config/fixture/ONNX/engine，不要继续投入大量时间修 FOV120 临时模型；
+2. 若必须保留 FOV120，先沿 `/Transpose_2` input 0 向上追踪实际数值 producer；
+3. 对实际 producer 做局部 identity barrier，再重建 Image FP32 并首先跑 40/40；
+4. 局部 barrier 无效时，再用 `--disable-cudnn-tactics` 做粗粒度诊断；
+5. 任一 L20 tactic 通过后必须做多样本验证，随后在 Nano 本机重新 build/validate；
+6. 若不同 tactic 均导致 query 34 分叉，应把它视为模型数值稳定性问题，通过训练
+   扰动、微调或结构调整解决，而不是继续追求单样本偶然通过。
+
 ## 1. 本次模型身份
 
 模型参数如下：
@@ -729,7 +830,8 @@ TensorRT layer 1712: SHUFFLE /Reshape_17
 `Transpose` 与 `Reshape` 不进行浮点算术，因此原始 feature 误差来自
 `/Transpose_2_output_0` 更上游。第一轮图修复在 `/Transpose_2` 的 input 0 前插入
 `racformer_identity` plugin，建立明确 fusion boundary，再重新 parse、build 和做
-decoded validation；若结果不变，再继续沿数据输入向上追踪实际数值 producer。
+decoded validation。该 barrier 已经完成但仍失败，确认位置太靠后；后续必须继续
+沿数据输入向上追踪实际数值 producer。
 
 当前 41/40 数值失败与实机 640×480/约 65.5° 相机不匹配是两个独立问题。
 数值比较的 PyTorch reference 和 TensorRT 都读取同一个由 1920×1080 训练图像生成
@@ -914,9 +1016,10 @@ commit、类别、范围、FOV、Query 数、帧数、精度组合、标定版�
 | L20 TRT 8.5 三图 parser | 完成；三图 PASS、parser errors 0、zero-dimension execution tensors 0 |
 | L20 TRT 8.5 三 engine 构建 | 完成；Image FP16 101.26 MB、Radar FP16 9.68 MB、Decoder FP32 80.20 MB |
 | L20 decoded validation | 主故障定位到 `image_feat_2`；`image_feat_3` 为 3.144 cm 次要边界误差；`image_feat_0/1` 通过 |
-| 本地中转归档 | 待执行 |
-| Nano plugin/engine 重建 | 待执行 |
-| Nano decoded validation 与测速 | 待执行 |
+| `/Transpose_2` 前 identity barrier | 已尝试，仍失败；屏障位置太靠后 |
+| 本地中转归档 | 待执行；离职前建议至少归档 ONNX、fixture、报告和 SHA256 |
+| Nano plugin/engine 重建 | 不应开始；L20 尚无通过的完整 engine 组合 |
+| Nano decoded validation 与测速 | 阻塞于 Image frontend 41/40，不得把当前性能作为交付结果 |
 | 最终 640×480 实机标定版本 | 待图像预处理和外参最终确认 |
 
 每完成一步，应把实际文件名、SHA256、报告路径和结果补回本节，避免只在终端或
