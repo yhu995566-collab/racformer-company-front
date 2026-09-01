@@ -701,6 +701,20 @@ RuntimeError: this TensorRT version does not expose builder_optimization_level
 source。即使某个 L20 tactic 在 sample-0 上通过，也必须在多样本和 Nano 重新验证，
 因为 Orin 会重新选择不同的硬件 tactic。
 
+将 workspace 从 8 GB 收紧到 1 GB 后，严格 FP32 Image engine 仍逐项复现原结果：
+
+```text
+all_cls_scores max_abs_error: 1.75267267
+all_bbox_preds max_abs_error: 0.57531738
+detections: 41/40
+query 34 分叉
+status: FAILED
+```
+
+这说明相关层选择没有随 workspace 改变；不再尝试 2 GB、4 GB 等中间值。
+下一步检查 `image_feat_2` 的 ONNX producer 与 TensorRT 相邻层，然后选择 identity
+fusion barrier 或 tactic-source 限制实验。
+
 当前 41/40 数值失败与实机 640×480/约 65.5° 相机不匹配是两个独立问题。
 数值比较的 PyTorch reference 和 TensorRT 都读取同一个由 1920×1080 训练图像生成
 的 640×256 fixture，实机图像没有进入该测试。因此 FOV 不匹配不是 query 34
