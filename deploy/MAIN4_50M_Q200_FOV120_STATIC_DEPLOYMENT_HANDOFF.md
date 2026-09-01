@@ -690,6 +690,23 @@ lss_bev_value: max 0.03595734, mean 0.00005196
 独有的大范围计算错误。下一步用不同 TensorRT tactic（先试 builder optimization
 level 0）重建严格 FP32 Image engine，验证能否避开当前数值路径。
 
+TensorRT 8.5.2.2 不暴露 `builder_optimization_level`，因此 opt-level-0 构建在
+创建 builder config 后立即失败，没有生成 engine：
+
+```text
+RuntimeError: this TensorRT version does not expose builder_optimization_level
+```
+
+后续只能使用 TRT 8.5 支持的方式改变 tactic，例如收紧 workspace 或限制 tactic
+source。即使某个 L20 tactic 在 sample-0 上通过，也必须在多样本和 Nano 重新验证，
+因为 Orin 会重新选择不同的硬件 tactic。
+
+当前 41/40 数值失败与实机 640×480/约 65.5° 相机不匹配是两个独立问题。
+数值比较的 PyTorch reference 和 TensorRT 都读取同一个由 1920×1080 训练图像生成
+的 640×256 fixture，实机图像没有进入该测试。因此 FOV 不匹配不是 query 34
+分叉的原因；但它仍会影响最终真实输入精度，当前 `staticgeom` 只能作为训练视图下
+的 TensorRT 技术基线，不能作为最终实机验收包。
+
 ## 7. Nano 阶段与最终目录
 
 服务器的 L20 `.engine` 和 x86_64 plugin `.so` 不能传到 Nano 执行。传输路线固定为：
