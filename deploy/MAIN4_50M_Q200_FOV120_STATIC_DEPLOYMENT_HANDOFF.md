@@ -211,6 +211,25 @@ status: SUCCESS
 model fixture 包含 22 个数组。该结果证明固定几何、静态雷达 padding、TRT 8.5
 图改写和完整模型 ONNX 边界都已通过，可以继续拆分三个部署子图。
 
+### 4.4 转换工具与输入输出关系
+
+这里没有使用 `trtexec` 直接把 `.pth` 转成 engine。转换被明确拆成以下阶段：
+
+| 阶段 | Python 工具 | 输入 | 输出 |
+| --- | --- | --- | --- |
+| PyTorch 基线 | `deploy.offline_demo` | config + `.pth` + dataset | PyTorch detection `.npz` |
+| 完整 ONNX | `deploy.export_onnx` | config + `.pth` + dataset | raw ONNX + model fixture + report |
+| Frontend ONNX | `deploy.export_frontend_onnx` | config + `.pth` + model fixture | frontend precompute ONNX + shared fixture |
+| Decoder ONNX | `deploy.export_decoder_recurrent_layer` | config + `.pth` + model fixture | 单层 recurrent decoder ONNX |
+| 提取 Image/LSS | `deploy.tensorrt.extract_onnx_subgraph` | frontend ONNX | Image/LSS ONNX |
+| 提取 Radar | `deploy.tensorrt.extract_onnx_subgraph` | frontend ONNX | Radar ONNX |
+| TRT 解析 | `deploy.tensorrt.parse_onnx` | 三个拆分 ONNX + plugin | 三份 parser report |
+| Engine 构建 | `deploy.tensorrt.build_engine` | 拆分 ONNX + plugin | 三个 `.engine` + build report |
+| 精度与测速 | `deploy.tensorrt.validate_frontend_decoder_numpy` | 三 engine + shared fixture + plugin | decoded validation 和分阶段延迟 report |
+
+`.pth` 只在服务器原生 PyTorch 环境中由三个 exporter 读取。TensorRT 容器不读取
+checkpoint；它只读取已经导出的 ONNX、fixture 和 plugin。
+
 ## 5. 服务器完整导出流程
 
 ### 5.1 初始化变量
@@ -320,11 +339,16 @@ python -m deploy.export_decoder_recurrent_layer \
 后续三 engine 验证必须使用 `frontend_precompute_sample0.npz`，不能使用
 `model_sample0.npz`。后者缺少 recurrent decoder 调度所需的完整 fixture 字段。
 
-## 6. TensorRT 8.5 容器阶段
+## 6. TensorRT 8.5 容器完整命令
 
-容器内定义：
+### 6.1 进入容器并定义路径
+
+在服务器宿主机执行前两行，后续命令全部在容器内执行：
 
 ```bash
+docker start racformer_trt85_l20
+docker exec -it racformer_trt85_l20 bash
+
 cd /workspace/RaCFormer
 
 ONNX=/workspace/outputs/deploy_onnx_50m_q200_fov120_p15_main4_e8_staticgeom
@@ -332,64 +356,173 @@ TRT=/workspace/outputs/deploy_tensorrt_50m_q200_fov120_p15_main4_e8_staticgeom
 PLUGIN=/workspace/RaCFormer/build/tensorrt_plugins_trt852_l20/libracformer_bev_pool_v2_trt.so
 
 mkdir -p "$TRT"
+
+ls -lh \
+  "$ONNX/racformer_50m_q200_fov120_p15_main4_e8_frontend_precompute_v2_trt85.onnx" \
+  "$ONNX/racformer_50m_q200_fov120_p15_main4_e8_frontend_precompute_sample0.npz" \
+  "$ONNX/racformer_50m_q200_fov120_p15_main4_e8_decoder_precompute_v2_trt85.onnx" \
+  "$PLUGIN"
+
+python -c \
+  "import ctypes; ctypes.CDLL('$PLUGIN'); print('plugin load: PASS')"
 ```
 
-需要从 frontend precompute ONNX 提取两个子图：
+### 6.2 从 frontend ONNX 提取两个独立子图
 
-```text
-racformer_50m_q200_fov120_p15_main4_e8_frontend_image_lss_trt85.onnx
-racformer_50m_q200_fov120_p15_main4_e8_frontend_radar_trt85.onnx
+Image/LSS：
+
+```bash
+python -m deploy.tensorrt.extract_onnx_subgraph \
+  --onnx "$ONNX/racformer_50m_q200_fov120_p15_main4_e8_frontend_precompute_v2_trt85.onnx" \
+  --output image_feat_0 \
+  --output image_feat_1 \
+  --output image_feat_2 \
+  --output image_feat_3 \
+  --output lss_bev_value \
+  --out "$ONNX/racformer_50m_q200_fov120_p15_main4_e8_frontend_image_lss_trt85.onnx" \
+  --report "$ONNX/extract_main4_frontend_image_lss_trt85.txt"
 ```
 
-三张图都必须先通过 `deploy.tensorrt.parse_onnx`，验收要求：
+Radar：
 
-```text
-status: PASS
-parser errors: 0
-zero-dimension execution tensors: 0
+```bash
+python -m deploy.tensorrt.extract_onnx_subgraph \
+  --onnx "$ONNX/racformer_50m_q200_fov120_p15_main4_e8_frontend_precompute_v2_trt85.onnx" \
+  --output radar_bev_value \
+  --out "$ONNX/racformer_50m_q200_fov120_p15_main4_e8_frontend_radar_trt85.onnx" \
+  --report "$ONNX/extract_main4_frontend_radar_trt85.txt"
 ```
 
-实际 TensorRT 8.5.2.2 parser 结果（2026-09-01）：
+检查：
 
-```text
-Image/LSS: PASS, parser errors 0, zero-dimension tensors 0,
-           zero-dimension execution tensors 0
-Radar:     PASS, parser errors 0, zero-dimension tensors 15,
-           zero-dimension execution tensors 0
-Decoder:   PASS, parser errors 0, zero-dimension tensors 35,
-           zero-dimension execution tensors 0
+```bash
+grep -H -E 'onnx checker:|status:' \
+  "$ONNX"/extract_main4_frontend_*.txt
 ```
 
-Radar 和 Decoder 的零维项目是 shape tensor，不是 execution tensor，不阻止建图。
+两个报告都必须为 `onnx checker: PASS` 和 `status: SUCCESS`。
 
-计划构建的 L20 engine：
+### 6.3 用 TensorRT 8.5.2 解析三个 ONNX
 
-```text
-racformer_50m_q200_fov120_p15_main4_e8_frontend_image_lss_trt852_l20_fp16.engine
-racformer_50m_q200_fov120_p15_main4_e8_frontend_radar_trt852_l20_fp16.engine
-racformer_50m_q200_fov120_p15_main4_e8_decoder_precompute_v2_trt852_l20_fp32.engine
+```bash
+python -m deploy.tensorrt.parse_onnx \
+  --onnx "$ONNX/racformer_50m_q200_fov120_p15_main4_e8_frontend_image_lss_trt85.onnx" \
+  --plugin "$PLUGIN" \
+  --fail-on-zero-dim \
+  --out "$TRT/parse_main4_frontend_image_lss_trt852_l20.txt"
+
+python -m deploy.tensorrt.parse_onnx \
+  --onnx "$ONNX/racformer_50m_q200_fov120_p15_main4_e8_frontend_radar_trt85.onnx" \
+  --plugin "$PLUGIN" \
+  --fail-on-zero-dim \
+  --out "$TRT/parse_main4_frontend_radar_trt852_l20.txt"
+
+python -m deploy.tensorrt.parse_onnx \
+  --onnx "$ONNX/racformer_50m_q200_fov120_p15_main4_e8_decoder_precompute_v2_trt85.onnx" \
+  --plugin "$PLUGIN" \
+  --fail-on-zero-dim \
+  --out "$TRT/parse_main4_decoder_precompute_v2_trt852_l20.txt"
 ```
 
-首选精度组合：
+统一检查：
 
-```text
-Image/LSS frontend: FP16
-Radar frontend: FP16
-Recurrent decoder: strict FP32，循环 6 次
-Initial query: fixture 中的 FP32
+```bash
+grep -H -E \
+'TensorRT version:|status:|parser errors:|zero-dimension tensors:|zero-dimension execution tensors:|RuntimeError|FAILED' \
+  "$TRT"/parse_main4_*.txt
 ```
 
-Radar FP16 已在上一模型族通过，但本模型仍必须重新验证。若 Radar FP16 未通过，
-回退到 Radar FP32；decoder 暂不使用 FP16。
+验收要求是 `status: PASS`、`parser errors: 0`、
+`zero-dimension execution tensors: 0`。实际结果为 Image/LSS 0、Radar 15、
+Decoder 35 个零维 shape tensor，但三者的 execution tensor 均为 0，已经通过。
 
-最终 L20 验证使用：
+### 6.4 构建三个 L20 engine
 
-```text
-deploy.tensorrt.validate_frontend_decoder_numpy
---initial-query-from-fixture
---accept-decoded-match
---atol 0.03
---profile-stages
+先统一定义文件名：
+
+```bash
+IMAGE_ENGINE="$TRT/racformer_50m_q200_fov120_p15_main4_e8_frontend_image_lss_trt852_l20_fp16.engine"
+RADAR_ENGINE="$TRT/racformer_50m_q200_fov120_p15_main4_e8_frontend_radar_trt852_l20_fp16.engine"
+DECODER_ENGINE="$TRT/racformer_50m_q200_fov120_p15_main4_e8_decoder_precompute_v2_trt852_l20_fp32.engine"
+FIXTURE="$ONNX/racformer_50m_q200_fov120_p15_main4_e8_frontend_precompute_sample0.npz"
+```
+
+三个 build 必须串行执行，不要并行争抢 GPU 显存和 TensorRT workspace。
+
+Image/LSS 使用 FP16：
+
+```bash
+python -m deploy.tensorrt.build_engine \
+  --onnx "$ONNX/racformer_50m_q200_fov120_p15_main4_e8_frontend_image_lss_trt85.onnx" \
+  --engine "$IMAGE_ENGINE" \
+  --plugin "$PLUGIN" \
+  --fp16 \
+  --workspace-gb 8 \
+  --out "$TRT/build_main4_frontend_image_lss_trt852_l20_fp16.txt"
+```
+
+Radar 使用 FP16：
+
+```bash
+python -m deploy.tensorrt.build_engine \
+  --onnx "$ONNX/racformer_50m_q200_fov120_p15_main4_e8_frontend_radar_trt85.onnx" \
+  --engine "$RADAR_ENGINE" \
+  --plugin "$PLUGIN" \
+  --fp16 \
+  --workspace-gb 8 \
+  --out "$TRT/build_main4_frontend_radar_trt852_l20_fp16.txt"
+```
+
+Decoder 使用严格 FP32，不能添加 `--fp16`：
+
+```bash
+python -m deploy.tensorrt.build_engine \
+  --onnx "$ONNX/racformer_50m_q200_fov120_p15_main4_e8_decoder_precompute_v2_trt85.onnx" \
+  --engine "$DECODER_ENGINE" \
+  --plugin "$PLUGIN" \
+  --workspace-gb 8 \
+  --out "$TRT/build_main4_decoder_precompute_v2_trt852_l20_fp32.txt"
+```
+
+检查三次构建：
+
+```bash
+grep -H -E \
+'TensorRT version:|engine:|precision:|build time:|engine size:|status:|FAILED|RuntimeError|Error' \
+  "$TRT"/build_main4_*.txt
+
+ls -lh "$IMAGE_ENGINE" "$RADAR_ENGINE" "$DECODER_ENGINE"
+```
+
+首选精度组合是 Image/LSS FP16、Radar FP16、Decoder strict FP32。Radar FP16
+若数值验证失败则单独回退 FP32；不能仅凭 build 成功接受 FP16 engine。
+
+### 6.5 三 engine decoded validation 和分阶段测速
+
+```bash
+REPORT="$TRT/validate_main4_three_engine_trt852_l20.txt"
+
+python -m deploy.tensorrt.validate_frontend_decoder_numpy \
+  --frontend-engine "$IMAGE_ENGINE" \
+  --radar-frontend-engine "$RADAR_ENGINE" \
+  --decoder-engine "$DECODER_ENGINE" \
+  --fixture "$FIXTURE" \
+  --plugin "$PLUGIN" \
+  --initial-query-from-fixture \
+  --accept-decoded-match \
+  --profile-stages \
+  --warmup 20 \
+  --iters 100 \
+  --atol 0.03 \
+  --out "$REPORT"
+```
+
+提取精度、显存和耗时：
+
+```bash
+grep -E \
+'all_cls_scores:|all_bbox_preds:|actual/reference detection count:|boxes close:|scores close:|labels equal:|decoded comparison passed:|end-to-end engine GPU latency:|frontend GPU latency:|radar frontend GPU latency:|recurrent decoder GPU latency:|decoder iteration [0-9]+ GPU latency:|resident CUDA memory delta:|deployment acceptance passed:|status:' \
+  "$REPORT"
 ```
 
 验收必须同时满足：
@@ -402,7 +535,7 @@ deploy.tensorrt.validate_frontend_decoder_numpy
 - `deployment acceptance passed: True`；
 - `status: SUCCESS`。
 
-仅 ONNX parser 或 engine build 成功不代表部署成功。
+仅 ONNX checker、parser 或 engine build 成功都不代表部署数值正确。
 
 ## 7. Nano 阶段与最终目录
 

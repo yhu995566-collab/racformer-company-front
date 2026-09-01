@@ -3,11 +3,13 @@
 Last updated: 2026-09-01
 
 The current Main4 50m-q200, four-frame, FOV120 fixed-platform deployment is
-tracked separately in
-`deploy/MAIN4_50M_Q200_FOV120_STATIC_DEPLOYMENT_HANDOFF.md`. That document
-contains the current checkpoint, server/container/local/Nano paths, static
-view-geometry decision, planned artifact names, validation gates, and final
-handoff package contents.
+tracked in the
+[Main4 fixed-platform deployment runbook](deploy/MAIN4_50M_Q200_FOV120_STATIC_DEPLOYMENT_HANDOFF.md).
+Sections 5 and 6 of that document contain the exact executable commands from
+`.pth` through full ONNX export, split ONNX export, TensorRT subgraph
+extraction, parsing, three-engine construction, decoded validation, and stage
+latency measurement. Use that runbook for the current model; the commands
+later in this file describe older artifact families.
 
 The clean offline transfer, environment inventory, aarch64 plugin build,
 three-engine construction, validation, benchmarking, and result-repatriation
