@@ -2,6 +2,13 @@
 
 Last updated: 2026-09-01
 
+This document covers ONNX, TensorRT, Nano, plugins, validation, profiling, and
+the C++ runtime only. Dataset conversion, train/validation splits, experiment
+parameters, metrics, checkpoints, and model-selection conclusions are recorded
+separately in the [training handoff](TRAINING_HANDOFF.md). Keep the two artifact
+families separate: a TensorRT engine is valid only for the exact training model
+identity documented with it.
+
 The current Main4 50m-q200, four-frame, FOV120 fixed-platform deployment is
 tracked in the
 [Main4 fixed-platform deployment runbook](deploy/MAIN4_50M_Q200_FOV120_STATIC_DEPLOYMENT_HANDOFF.md).
