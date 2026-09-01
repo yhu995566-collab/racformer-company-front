@@ -284,6 +284,14 @@ export_main4_frontend_precompute_v2_trt85.txt
 export_main4_decoder_precompute_v2_trt85.txt
 ```
 
+实际导出结果（2026-09-01）：
+
+```text
+frontend precompute ONNX: 172 MB, onnx checker PASS, status SUCCESS
+frontend precompute fixture: 110 MB
+recurrent decoder ONNX: 80 MB, onnx checker PASS, status SUCCESS
+```
+
 执行：
 
 ```bash
@@ -556,7 +564,7 @@ commit、类别、范围、FOV、Query 数、帧数、精度组合、标定版�
 | PyTorch 动态训练几何 sample-0 | 完成，26 detections，仅供旧基线参考 |
 | PyTorch 静态几何 sample-0 | 正在执行/待确认 |
 | 完整模型静态几何 ONNX | 完成；40/40 decoded boundary 一致，`status: SUCCESS` |
-| frontend/decoder 拆分导出 | 待执行 |
+| frontend/decoder 拆分导出 | 完成；frontend 172 MB、fixture 110 MB、decoder 80 MB，两个 checker/status 均通过 |
 | L20 TRT 8.5 三 engine 构建 | 待执行 |
 | L20 decoded validation | 待执行 |
 | 本地中转归档 | 待执行 |
