@@ -604,6 +604,24 @@ status: FAILED
 先用 `validate_decoder_loop_numpy` 绕过两个 frontend，隔离 recurrent decoder
 engine；若 decoder-only 通过，再分别检查 Image/LSS 和 Radar frontend 输出边界。
 
+Decoder-only FP32 隔离验证已经成功：
+
+```text
+all_cls_scores max_abs_error: 0.00371933
+all_bbox_preds max_abs_error: 0.00505805
+actual/reference detection count: 40/40
+boxes max_abs_error: 0.00100172
+scores max_abs_error: 0.00001678
+labels equal: True
+decoded comparison passed: True
+deployment acceptance passed: True
+status: SUCCESS
+```
+
+因此 recurrent decoder engine、50 m polar radius 和六次调度均正确。问题位于
+frontend split 输出进入 decoder 的边界，下一步使用
+`--frontend-output-from-fixture` 分别替换 Radar 与 Image/LSS 输出进行隔离。
+
 ## 7. Nano 阶段与最终目录
 
 服务器的 L20 `.engine` 和 x86_64 plugin `.so` 不能传到 Nano 执行。传输路线固定为：
@@ -780,7 +798,7 @@ commit、类别、范围、FOV、Query 数、帧数、精度组合、标定版�
 | frontend/decoder 拆分导出 | 完成；frontend 172 MB、fixture 110 MB、decoder 80 MB，两个 checker/status 均通过 |
 | L20 TRT 8.5 三图 parser | 完成；三图 PASS、parser errors 0、zero-dimension execution tensors 0 |
 | L20 TRT 8.5 三 engine 构建 | 完成；Image FP16 101.26 MB、Radar FP16 9.68 MB、Decoder FP32 80.20 MB |
-| L20 decoded validation | FP16/FP16/FP32 为 39/40；FP16/FP32/FP32 为 38/40；全 FP32 为 41/40；转入 decoder/frontend 边界隔离 |
+| L20 decoded validation | decoder-only FP32 40/40 成功；完整链路失败已定位到 frontend split 输出边界，正在隔离 Image/LSS 与 Radar |
 | 本地中转归档 | 待执行 |
 | Nano plugin/engine 重建 | 待执行 |
 | Nano decoded validation 与测速 | 待执行 |
