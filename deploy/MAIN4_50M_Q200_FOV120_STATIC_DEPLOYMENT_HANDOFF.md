@@ -569,6 +569,24 @@ status: FAILED
 首次失败运行的延迟分布明显双峰（端到端 p50 38.251 ms、p95 112.819 ms），
 在精度失败且 GPU 运行状态不稳定时不能作为最终性能数据。
 
+第二次 `Image FP16 + Radar FP32 + Decoder FP32` 验证仍失败：
+
+```text
+all_cls_scores max_abs_error: 2.05019331
+all_bbox_preds max_abs_error: 1.37683725
+actual/reference detection count: 38/40
+boxes close: False
+scores close: False
+labels equal: False
+decoded comparison passed: False
+deployment acceptance passed: False
+status: FAILED
+```
+
+Radar 改为 FP32 后 bbox 最大误差从 4.7102 m 降至 1.3768 m，但约 2.05 的
+分类最大误差仍然存在，说明 Image FP16 也不可靠；Radar FP16 同时可能贡献了
+部分 bbox 误差。下一步必须构建 Image FP32 并先验证全 FP32 基线。
+
 ## 7. Nano 阶段与最终目录
 
 服务器的 L20 `.engine` 和 x86_64 plugin `.so` 不能传到 Nano 执行。传输路线固定为：
@@ -745,7 +763,7 @@ commit、类别、范围、FOV、Query 数、帧数、精度组合、标定版�
 | frontend/decoder 拆分导出 | 完成；frontend 172 MB、fixture 110 MB、decoder 80 MB，两个 checker/status 均通过 |
 | L20 TRT 8.5 三图 parser | 完成；三图 PASS、parser errors 0、zero-dimension execution tensors 0 |
 | L20 TRT 8.5 三 engine 构建 | 完成；Image FP16 101.26 MB、Radar FP16 9.68 MB、Decoder FP32 80.20 MB |
-| L20 decoded validation | FP16/FP16/FP32 首测失败，39/40；正在进行 Radar FP32 精度隔离 |
+| L20 decoded validation | FP16/FP16/FP32 为 39/40；FP16/FP32/FP32 为 38/40；下一步验证全 FP32 |
 | 本地中转归档 | 待执行 |
 | Nano plugin/engine 重建 | 待执行 |
 | Nano decoded validation 与测速 | 待执行 |
