@@ -587,6 +587,23 @@ Radar 改为 FP32 后 bbox 最大误差从 4.7102 m 降至 1.3768 m，但约 2.0
 分类最大误差仍然存在，说明 Image FP16 也不可靠；Radar FP16 同时可能贡献了
 部分 bbox 误差。下一步必须构建 Image FP32 并先验证全 FP32 基线。
 
+第三次全 FP32 验证仍失败，因此问题不能归因于 FP16：
+
+```text
+all_cls_scores max_abs_error: 1.75270605
+all_bbox_preds max_abs_error: 0.57533929
+actual/reference detection count: 41/40
+elements above atol: cls 9/4800, bbox 29/12000
+decoded comparison passed: False
+deployment acceptance passed: False
+status: FAILED
+```
+
+绝大多数元素已经接近参考，但 query 34 在第六次 decoder 迭代发生明显分叉。
+完整模型 ONNX 的 decoded boundary 曾通过 40/40，因此后续停止精度组合试验，
+先用 `validate_decoder_loop_numpy` 绕过两个 frontend，隔离 recurrent decoder
+engine；若 decoder-only 通过，再分别检查 Image/LSS 和 Radar frontend 输出边界。
+
 ## 7. Nano 阶段与最终目录
 
 服务器的 L20 `.engine` 和 x86_64 plugin `.so` 不能传到 Nano 执行。传输路线固定为：
@@ -763,7 +780,7 @@ commit、类别、范围、FOV、Query 数、帧数、精度组合、标定版�
 | frontend/decoder 拆分导出 | 完成；frontend 172 MB、fixture 110 MB、decoder 80 MB，两个 checker/status 均通过 |
 | L20 TRT 8.5 三图 parser | 完成；三图 PASS、parser errors 0、zero-dimension execution tensors 0 |
 | L20 TRT 8.5 三 engine 构建 | 完成；Image FP16 101.26 MB、Radar FP16 9.68 MB、Decoder FP32 80.20 MB |
-| L20 decoded validation | FP16/FP16/FP32 为 39/40；FP16/FP32/FP32 为 38/40；下一步验证全 FP32 |
+| L20 decoded validation | FP16/FP16/FP32 为 39/40；FP16/FP32/FP32 为 38/40；全 FP32 为 41/40；转入 decoder/frontend 边界隔离 |
 | 本地中转归档 | 待执行 |
 | Nano plugin/engine 重建 | 待执行 |
 | Nano decoded validation 与测速 | 待执行 |
