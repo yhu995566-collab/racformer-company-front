@@ -497,6 +497,14 @@ ls -lh "$IMAGE_ENGINE" "$RADAR_ENGINE" "$DECODER_ENGINE"
 首选精度组合是 Image/LSS FP16、Radar FP16、Decoder strict FP32。Radar FP16
 若数值验证失败则单独回退 FP32；不能仅凭 build 成功接受 FP16 engine。
 
+实际 L20 构建结果（2026-09-01）：
+
+```text
+Image/LSS FP16: SUCCESS, 101.26 MB, 757.552 s
+Radar FP16:     SUCCESS,   9.68 MB, 510.844 s
+Decoder FP32:   SUCCESS,  80.20 MB, 256.346 s
+```
+
 ### 6.5 三 engine decoded validation 和分阶段测速
 
 ```bash
@@ -536,6 +544,30 @@ grep -E \
 - `status: SUCCESS`。
 
 仅 ONNX checker、parser 或 engine build 成功都不代表部署数值正确。
+
+首次 `Image FP16 + Radar FP16 + Decoder FP32` 验证失败：
+
+```text
+decoder polar radius: 50.000000 m
+all_cls_scores max_abs_error: 2.04384089
+all_bbox_preds max_abs_error: 4.71020412
+actual/reference detection count: 39/40
+boxes close: False
+scores close: False
+labels equal: False
+decoded comparison passed: False
+deployment acceptance passed: False
+status: FAILED
+```
+
+这不是可用 3 cm 门限接受的边界误差。后续按以下顺序隔离精度来源：
+
+1. 新建 Radar FP32，测试 Image FP16 + Radar FP32 + Decoder FP32；
+2. 若仍失败，新建 Image FP32，先验证全 FP32 可靠基线；
+3. 全 FP32 通过后，再用 Image FP32 + Radar FP16 判断 Radar FP16 是否可单独使用。
+
+首次失败运行的延迟分布明显双峰（端到端 p50 38.251 ms、p95 112.819 ms），
+在精度失败且 GPU 运行状态不稳定时不能作为最终性能数据。
 
 ## 7. Nano 阶段与最终目录
 
@@ -712,8 +744,8 @@ commit、类别、范围、FOV、Query 数、帧数、精度组合、标定版�
 | 完整模型静态几何 ONNX | 完成；40/40 decoded boundary 一致，`status: SUCCESS` |
 | frontend/decoder 拆分导出 | 完成；frontend 172 MB、fixture 110 MB、decoder 80 MB，两个 checker/status 均通过 |
 | L20 TRT 8.5 三图 parser | 完成；三图 PASS、parser errors 0、zero-dimension execution tensors 0 |
-| L20 TRT 8.5 三 engine 构建 | 待执行；parser 通过不产生 `.engine` 文件 |
-| L20 decoded validation | 待执行 |
+| L20 TRT 8.5 三 engine 构建 | 完成；Image FP16 101.26 MB、Radar FP16 9.68 MB、Decoder FP32 80.20 MB |
+| L20 decoded validation | FP16/FP16/FP32 首测失败，39/40；正在进行 Radar FP32 精度隔离 |
 | 本地中转归档 | 待执行 |
 | Nano plugin/engine 重建 | 待执行 |
 | Nano decoded validation 与测速 | 待执行 |
