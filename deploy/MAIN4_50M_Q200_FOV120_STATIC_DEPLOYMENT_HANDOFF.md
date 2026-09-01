@@ -160,7 +160,7 @@ outputs/deploy_onnx_50m_q200_fov120_p15_main4_e8_traincalib/main4_pytorch_sample
 该次结果为 26 个 detection。它使用训练数据中逐帧变化的位姿，不能作为新的静态
 几何 TensorRT fixture 的数值参考。
 
-### 4.3 当前正在生成的静态几何产物目录
+### 4.3 当前静态几何产物目录
 
 服务器宿主机：
 
@@ -180,13 +180,36 @@ outputs/deploy_onnx_50m_q200_fov120_p15_main4_e8_traincalib/main4_pytorch_sample
 main4_pytorch_static_geometry_sample0.npz
 ```
 
-完整模型导出文件计划为：
+完整模型导出文件已经生成：
 
 ```text
 racformer_50m_q200_fov120_p15_main4_e8_raw_trt85.onnx
 racformer_50m_q200_fov120_p15_main4_e8_model_sample0.npz
 export_main4_model_trt85.txt
 ```
+
+完整模型导出结果：
+
+```text
+fixed view geometry: True
+fixed view geometry frame max error: 0.00000000
+static radar padding comparison passed: True
+fixed BEV rank count: 39944
+fixed BEV interval count: 2781
+boundary comparison passed: True
+legacy/current detection count: 40/40
+boxes max_abs_error: 0.00061393
+scores max_abs_error: 0.00000748
+labels equal: True
+decoded boundary comparison passed: True
+IsInf nodes remaining: 0
+LayerNormalization nodes remaining: 0
+onnx checker: PASS
+status: SUCCESS
+```
+
+model fixture 包含 22 个数组。该结果证明固定几何、静态雷达 padding、TRT 8.5
+图改写和完整模型 ONNX 边界都已通过，可以继续拆分三个部署子图。
 
 ## 5. 服务器完整导出流程
 
@@ -532,7 +555,7 @@ commit、类别、范围、FOV、Query 数、帧数、精度组合、标定版�
 | 固定平台静态几何支持 | 完成并推送，commit `d96f4e3` |
 | PyTorch 动态训练几何 sample-0 | 完成，26 detections，仅供旧基线参考 |
 | PyTorch 静态几何 sample-0 | 正在执行/待确认 |
-| 完整模型静态几何 ONNX | 正在执行/待确认 |
+| 完整模型静态几何 ONNX | 完成；40/40 decoded boundary 一致，`status: SUCCESS` |
 | frontend/decoder 拆分导出 | 待执行 |
 | L20 TRT 8.5 三 engine 构建 | 待执行 |
 | L20 decoded validation | 待执行 |
