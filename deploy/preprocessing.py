@@ -27,6 +27,9 @@ class DeploymentPreprocessor:
         self.depth_max = float(cfg.grid_config['depth'][1])
         self.point_cloud_range = np.asarray(
             cfg.point_cloud_range, dtype=np.float32)
+        deployment = getattr(cfg, 'deployment', {})
+        self.static_view_geometry = bool(
+            deployment.get('static_view_geometry', False))
         horizontal_fov_deg = getattr(cfg, 'horizontal_fov_deg', None)
         if horizontal_fov_deg is None:
             self.horizontal_fov_tangent = None
@@ -161,6 +164,13 @@ class DeploymentPreprocessor:
             self._validate_frame(frame)
 
         reference_radar_time = float(frames[0].radar_timestamp)
+        # A fixed deployment platform has no inter-frame ego motion. Reuse
+        # the current frame calibration for every temporal slot so exported
+        # fixed-view geometry matches the runtime contract.
+        reference_lidar2img = np.asarray(
+            frames[0].lidar2img, dtype=np.float32)
+        reference_intrinsic = np.asarray(
+            frames[0].intrinsic, dtype=np.float32)
         images = []
         radar_points = []
         radar_depth = []
@@ -170,8 +180,13 @@ class DeploymentPreprocessor:
 
         for frame in frames:
             image = self._transform_image(frame.image)
-            lidar2img = self.ida_matrix @ np.asarray(
-                frame.lidar2img, dtype=np.float32)
+            raw_lidar2img = (
+                reference_lidar2img if self.static_view_geometry
+                else np.asarray(frame.lidar2img, dtype=np.float32))
+            raw_intrinsic = (
+                reference_intrinsic if self.static_view_geometry
+                else np.asarray(frame.intrinsic, dtype=np.float32))
+            lidar2img = self.ida_matrix @ raw_lidar2img
             points = self._filter_radar(frame.radar_points)
             points[:, 6] = reference_radar_time - float(
                 frame.radar_timestamp)
@@ -183,7 +198,7 @@ class DeploymentPreprocessor:
             radar_depth.append(depth_map)
             radar_rcs.append(rcs_map)
             lidar2imgs.append(lidar2img)
-            intrinsics.append(self._intrinsic_4x4(frame.intrinsic))
+            intrinsics.append(self._intrinsic_4x4(raw_intrinsic))
 
         image_shapes = [
             (self.final_height, self.final_width, 3)

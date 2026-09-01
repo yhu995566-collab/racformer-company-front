@@ -61,6 +61,7 @@ deployment = dict(
     network_image_size=(640, 256),
     horizontal_fov_deg=horizontal_fov_deg,
     roi_mode='rectangle_fov_intersection',
+    static_view_geometry=True,
     radar_point_fields=['x', 'y', 'z', 'rcs', 'vx', 'vy', 'time_lag'],
     radar_points_in_ego=True,
     image_color_order='BGR',
