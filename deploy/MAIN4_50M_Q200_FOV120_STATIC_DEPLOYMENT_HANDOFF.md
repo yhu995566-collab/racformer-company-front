@@ -641,6 +641,25 @@ fixture Image/LSS + 真实 Radar FP32:
 替换 `lss_bev_value` 和四个 `image_feat_*` 输出，继续区分 image backbone/neck
 特征与 LSS BEV 分支。
 
+Image features 与 LSS 分组隔离结果：
+
+```text
+真实 image_feat_0..3 + fixture LSS/Radar:
+  detections 41/40, query 34 分叉, status FAILED
+
+真实 lss_bev_value + fixture image_feat_0..3/Radar:
+  detections 40/40
+  all_cls_scores max_abs_error 0.00269413
+  all_bbox_preds max_abs_error 0.00713301
+  boxes max_abs_error 0.00179803
+  labels equal True
+  status SUCCESS
+```
+
+因此 LSS/BEV pooling 分支已经排除，问题明确位于四个 image backbone/neck
+feature 输出。下一步逐个放行 `image_feat_0` 至 `image_feat_3`，判断单一尺度错误
+还是多尺度小误差叠加。
+
 ## 7. Nano 阶段与最终目录
 
 服务器的 L20 `.engine` 和 x86_64 plugin `.so` 不能传到 Nano 执行。传输路线固定为：
@@ -817,7 +836,7 @@ commit、类别、范围、FOV、Query 数、帧数、精度组合、标定版�
 | frontend/decoder 拆分导出 | 完成；frontend 172 MB、fixture 110 MB、decoder 80 MB，两个 checker/status 均通过 |
 | L20 TRT 8.5 三图 parser | 完成；三图 PASS、parser errors 0、zero-dimension execution tensors 0 |
 | L20 TRT 8.5 三 engine 构建 | 完成；Image FP16 101.26 MB、Radar FP16 9.68 MB、Decoder FP32 80.20 MB |
-| L20 decoded validation | Decoder 与 Radar FP32 均通过隔离；失败已定位到 Image/LSS frontend，正在区分 image features 与 LSS BEV |
+| L20 decoded validation | Decoder、Radar、LSS 均通过隔离；失败已定位到 `image_feat_0..3`，正在逐尺度隔离 |
 | 本地中转归档 | 待执行 |
 | Nano plugin/engine 重建 | 待执行 |
 | Nano decoded validation 与测速 | 待执行 |
