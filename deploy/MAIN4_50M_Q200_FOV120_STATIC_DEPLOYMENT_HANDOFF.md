@@ -674,6 +674,22 @@ image_feat_3: 40/40, labels/scores一致, boxes max error 0.03144479, FAILED
 `image_feat_0/1` 已通过。下一步直接比较 Image FP32 engine 的五个原始输出与
 frontend fixture，量化各 feature 在进入 decoder 前的实际误差。
 
+Image FP32 engine 原始输出比较：
+
+```text
+image_feat_0: max 0.20073843, mean 0.01572888
+image_feat_1: max 0.16769409, mean 0.01372290
+image_feat_2: max 0.12721252, mean 0.01066186
+image_feat_3: max 0.05047607, mean 0.00502714
+lss_bev_value: max 0.03595734, mean 0.00005196
+```
+
+四个 image feature 都存在 TensorRT 与 fixture 的浮点累计差异；`image_feat_2`
+并不是原始误差最大的输出，但 decoder/query 34 只对该尺度表现出灾难性敏感性。
+因此当前更准确的根因是“模型对 level-2 特征数值扰动不稳定”，而不是该输出出现
+独有的大范围计算错误。下一步用不同 TensorRT tactic（先试 builder optimization
+level 0）重建严格 FP32 Image engine，验证能否避开当前数值路径。
+
 ## 7. Nano 阶段与最终目录
 
 服务器的 L20 `.engine` 和 x86_64 plugin `.so` 不能传到 Nano 执行。传输路线固定为：
