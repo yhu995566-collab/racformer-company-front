@@ -1,3 +1,5 @@
+import os as _os
+
 _base_ = ['../racformer_company_front_50m_q200_f4_30k_train.py']
 
 # Frozen deployment geometry for the final Main4 FOV experiment.  Do not use
@@ -8,6 +10,14 @@ num_cams = 1
 horizontal_fov_deg = 120.0
 query_distance_power = 1.5
 class_names = ['car', 'truck', 'bicycle', 'pedestrian']
+
+deploy_data_root = _os.path.abspath(_os.environ.get(
+    'RACFORMER_DEPLOY_DATA_ROOT',
+    '/mnt/diskNvme1/hyh/data/'
+    'company_20260818_30k_front50_q200_f4/processed_trainval_v1')) + '/'
+deploy_ann_file = _os.path.abspath(_os.environ.get(
+    'RACFORMER_DEPLOY_ANN_FILE',
+    deploy_data_root + 'custom_infos_val_sweep.pkl'))
 
 point_cloud_range = [0.0, -20.0, -3.0, 50.0, 20.0, 3.0]
 ida_aug_conf = {
@@ -35,9 +45,11 @@ model = dict(pts_bbox_head=dict(
 # rectangle-intersect-FOV filtering after radar points are in ego coordinates.
 data = dict(
     val=dict(
+        data_root=deploy_data_root, ann_file=deploy_ann_file,
         pipeline=[], classes=class_names, num_sweeps=num_frames - 1,
         horizontal_fov_deg=horizontal_fov_deg),
     test=dict(
+        data_root=deploy_data_root, ann_file=deploy_ann_file,
         pipeline=[], classes=class_names, num_sweeps=num_frames - 1,
         horizontal_fov_deg=horizontal_fov_deg))
 
