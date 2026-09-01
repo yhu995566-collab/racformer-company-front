@@ -28,8 +28,8 @@ Profiles:
                            full train set, FOV120, distance power 1.5, 8 epochs
   full_main3_f4_fov120_p15_e20
                            blocked dev split, FOV120, distance power 1.5, 20 epochs
-  full_main3_f4_fov60_p15_e20
-                           front60 camera, blocked dev, power 1.5, 20 epochs
+  full_main3_f4_cam60_det120_p15_e20
+                           front60 image, 120-degree radar/detection/query
   full_main4_f4_fov120_p15_e8
                            car/truck/bicycle/pedestrian, blocked dev, 8 epochs
 EOF
@@ -45,6 +45,7 @@ set_profile() {
     export RACFORMER_TUNE_BBOX_LOSS_WEIGHT=0.25
     export RACFORMER_TUNE_CODE_WEIGHTS=2,2,1,1,1,1,1,1,1,1
     export RACFORMER_TUNE_HORIZONTAL_FOV_DEG=0
+    export RACFORMER_TUNE_CAMERA_HORIZONTAL_FOV_DEG=0
     export RACFORMER_TUNE_QUERY_DISTANCE_POWER=1.0
     export RACFORMER_TUNE_CHECKPOINT_INTERVAL=2
     export RACFORMER_TUNE_MAX_KEEP_CKPTS=1
@@ -95,8 +96,9 @@ set_profile() {
             export RACFORMER_TUNE_CHECKPOINT_INTERVAL=4
             export RACFORMER_TUNE_MAX_KEEP_CKPTS=4
             ;;
-        full_main3_f4_fov60_p15_e20)
-            export RACFORMER_TUNE_HORIZONTAL_FOV_DEG=60
+        full_main3_f4_cam60_det120_p15_e20)
+            export RACFORMER_TUNE_CAMERA_HORIZONTAL_FOV_DEG=60
+            export RACFORMER_TUNE_HORIZONTAL_FOV_DEG=120
             export RACFORMER_TUNE_QUERY_DISTANCE_POWER=1.5
             export RACFORMER_TUNE_EPOCHS=20
             export RACFORMER_TUNE_CHECKPOINT_INTERVAL=4

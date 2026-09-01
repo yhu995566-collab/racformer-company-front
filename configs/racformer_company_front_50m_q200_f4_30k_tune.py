@@ -33,6 +33,15 @@ if horizontal_fov_deg <= 0:
     horizontal_fov_deg = None
 elif horizontal_fov_deg >= 180:
     raise ValueError('RACFORMER_TUNE_HORIZONTAL_FOV_DEG must be < 180')
+# Informational optical coverage. Detection/GT/radar/query filtering is
+# controlled only by horizontal_fov_deg above; camera visibility is governed
+# geometrically by the calibrated lidar2img matrices in the converted infos.
+camera_horizontal_fov_deg = float(_os.environ.get(
+    'RACFORMER_TUNE_CAMERA_HORIZONTAL_FOV_DEG', '0'))
+if not 0.0 <= camera_horizontal_fov_deg < 180.0:
+    raise ValueError(
+        'RACFORMER_TUNE_CAMERA_HORIZONTAL_FOV_DEG must be in [0, 180)')
+detection_horizontal_fov_deg = horizontal_fov_deg
 total_epochs = int(_os.environ.get('RACFORMER_TUNE_EPOCHS', '12'))
 eval_interval = int(_os.environ.get('RACFORMER_TUNE_EVAL_INTERVAL', '2'))
 checkpoint_interval = int(_os.environ.get(
